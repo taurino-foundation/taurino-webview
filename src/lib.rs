@@ -23,14 +23,13 @@ use tao::{
 /* use url::Url; */
 pub(crate) mod protocol;
 use crate::{
-    attributes::WebviewAttributes, error::Error, manager::Manager, pending::PendingWebview,
-    wrapper::Rect,
+    attributes::WebviewAttributes, builder::WebViewBuilder, error::Error, manager::Manager, pending::PendingWebview, wrapper::Rect
 };
 
 /// Result type.
 pub type Result<T> = std::result::Result<T, Error>;
 
-fn main() -> Result<()> {
+fn simple() -> Result<()> {
     let event_loop = EventLoop::new();
 
     let window = WindowBuilder::new()
@@ -38,7 +37,7 @@ fn main() -> Result<()> {
         .build(&event_loop)
         .expect("failed to create tao window");
 
-    let mut manager = Manager::new()?
+let mut manager = Manager::new()?
         .set_window_id(window.id())
         .set_static_dir("dist");
 
@@ -58,29 +57,25 @@ fn main() -> Result<()> {
     let layouts = [
         // oben links
         (0.0, 0.0, half_width, half_height),
+
         // oben rechts
         (half_width, 0.0, half_width, half_height),
+
         // unten links
         (0.0, half_height, half_width, half_height),
+
         // unten rechts
         (half_width, half_height, half_width, half_height),
     ];
 
     for ((label, page), (x, y, width, height)) in pages.into_iter().zip(layouts) {
-        let mut attrs = WebviewAttributes::new(types::WebviewUrl::App(PathBuf::from(page)))
-            .scroll_bar_style(types::ScrollBarStyle::FluentOverlay)
-            .auto_resize();
-
-        attrs.bounds = Some(Rect {
-            position: LogicalPosition::new(x, y).into(),
-            size: LogicalSize::new(width, height).into(),
-        });
-
-        let pending = PendingWebview::new(label, true, attrs);
+        let pending = WebViewBuilder::app(label, page)
+            .auto_resize()
+            .bounds(x, y, width, height)
+            .build();
 
         manager.create_webview(&window, pending)?;
     }
-
     event_loop.run(move |event, _, control_flow| {
         *control_flow = ControlFlow::Wait;
 
