@@ -1,0 +1,2797 @@
+builder.rs(use std::path::PathBuf;
+
+use http::Request;
+use url::Url;
+
+use crate::{
+    types::{
+        BackgroundThrottlingPolicy, Color, ScrollBarStyle, WebViewMetaData, WebviewUrl,
+        WindowEffectsConfig,
+    },
+    wrapper::Rect,
+};
+
+/// The attributes used to create an webview.
+#[derive(Debug)]
+pub struct WebviewAttributes {
+    pub url: WebviewUrl,
+    pub user_agent: Option<String>,
+    /// A list of initialization javascript scripts to run when loading new pages.
+    /// When webview load a new page, this initialization code will be executed.
+    /// It is guaranteed that code is executed before `window.onload`.
+    ///
+    /// ## Platform-specific
+    ///
+    /// - **Windows:** scripts are always added to subframes.
+    /// - **Android:** When [addDocumentStartJavaScript] is not supported,
+    ///   we prepend initialization scripts to each HTML head (implementation only supported on custom protocol URLs).
+    ///   For remote URLs, we use [onPageStarted] which is not guaranteed to run before other scripts.
+    ///
+    /// [addDocumentStartJavaScript]: https://developer.android.com/reference/androidx/webkit/WebViewCompat#addDocumentStartJavaScript(android.webkit.WebView,java.lang.String,java.util.Set%3Cjava.lang.String%3E)
+    /// [onPageStarted]: https://developer.android.com/reference/android/webkit/WebViewClient#onPageStarted(android.webkit.WebView,%20java.lang.String,%20android.graphics.Bitmap)
+    pub initialization_scripts: Vec<InitializationScript>,
+    pub data_directory: Option<PathBuf>,
+    pub drag_drop_handler_enabled: bool,
+    pub clipboard: bool,
+    pub accept_first_mouse: bool,
+    pub additional_browser_args: Option<String>,
+    pub window_effects: Option<WindowEffectsConfig>,
+    pub incognito: bool,
+    pub transparent: bool,
+    pub focus: bool,
+    pub bounds: Option<Rect>,
+    pub auto_resize: bool,
+    pub proxy_url: Option<Url>,
+    pub zoom_hotkeys_enabled: bool,
+    pub browser_extensions_enabled: bool,
+    pub extensions_path: Option<PathBuf>,
+    pub data_store_identifier: Option<[u8; 16]>,
+    pub use_https_scheme: bool,
+    pub devtools: Option<bool>,
+    pub background_color: Option<Color>,
+    pub traffic_light_position: Option<dpi::Position>,
+    pub background_throttling: Option<BackgroundThrottlingPolicy>,
+    pub javascript_disabled: bool,
+    /// on macOS and iOS there is a link preview on long pressing links, this is enabled by default.
+    /// see https://docs.rs/objc2-web-kit/latest/objc2_web_kit/struct.WKWebView.html#method.allowsLinkPreview
+    pub allow_link_preview: bool,
+    pub scroll_bar_style: ScrollBarStyle,
+    /// Controls the WebView's browser-level general autofill behavior.
+    ///
+    /// **This option does not disable password or credit card autofill.**
+    ///
+    /// When set to `false`, the WebView will not automatically populate
+    /// general form fields using previously stored data such as addresses
+    /// or contact information.
+    ///
+    /// If not specified, this is `true` by default.
+    ///
+    /// ## Platform-specific
+    ///
+    /// - **Windows**: Supported. WebView2's autofill feature (called
+    ///   "Suggestions") may not honor `autocomplete="off"` on input
+    ///   elements in some cases.
+    /// - **Linux / Android / iOS / macOS**: Unsupported and performs no
+    ///   operation.
+    pub general_autofill_enabled: bool,
+    /// Allows overriding the keyboard accessory view on iOS.
+    /// Returning `None` effectively removes the view.
+    ///
+    /// The closure parameter is the webview instance.
+    ///
+    /// The accessory view is the view that appears above the keyboard when a text input element is focused.
+    /// It usually displays a view with "Done", "Next" buttons.
+    ///
+    /// # Stability
+    ///
+    /// This relies on [`objc2_ui_kit`] which does not provide a stable API yet, so it can receive breaking changes in minor releases.
+    #[cfg(target_os = "ios")]
+    pub input_accessory_view_builder: Option<InputAccessoryViewBuilder>,
+
+    /// Set the environment for the webview.
+    /// Useful if you need to share the same environment, for instance when using the [`PendingWebview::new_window_handler`].
+    #[cfg(windows)]
+    pub environment:
+        Option<webview2_com::Microsoft::Web::WebView2::Win32::ICoreWebView2Environment>,
+
+    /// Creates a new webview sharing the same web process with the provided webview.
+    /// Useful if you need to link a webview to another, for instance when using the [`PendingWebview::new_window_handler`].
+    #[cfg(any(
+        target_os = "linux",
+        target_os = "dragonfly",
+        target_os = "freebsd",
+        target_os = "netbsd",
+        target_os = "openbsd",
+    ))]
+    pub related_view: Option<webkit2gtk::WebView>,
+
+    #[cfg(target_os = "macos")]
+    pub webview_configuration: Option<objc2::rc::Retained<objc2_web_kit::WKWebViewConfiguration>>,
+}
+
+unsafe impl Send for WebviewAttributes {}
+unsafe impl Sync for WebviewAttributes {}
+
+#[cfg(target_os = "ios")]
+#[non_exhaustive]
+pub struct InputAccessoryViewBuilder(pub Box<InputAccessoryViewBuilderFn>);
+
+#[cfg(target_os = "ios")]
+impl std::fmt::Debug for InputAccessoryViewBuilder {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::result::Result<(), std::fmt::Error> {
+        f.debug_struct("InputAccessoryViewBuilder").finish()
+    }
+}
+
+#[cfg(target_os = "ios")]
+impl InputAccessoryViewBuilder {
+    pub fn new(builder: Box<InputAccessoryViewBuilderFn>) -> Self {
+        Self(builder)
+    }
+}
+
+impl WebviewAttributes {
+    /// Initializes the default attributes for a webview.
+    pub fn new(url: WebviewUrl) -> Self {
+        Self {
+            url,
+            user_agent: None,
+            initialization_scripts: Vec::new(),
+            data_directory: None,
+            drag_drop_handler_enabled: true,
+            clipboard: false,
+            accept_first_mouse: false,
+            additional_browser_args: None,
+            window_effects: None,
+            incognito: false,
+            transparent: false,
+            focus: true,
+            bounds: None,
+            auto_resize: false,
+            proxy_url: None,
+            zoom_hotkeys_enabled: false,
+            browser_extensions_enabled: false,
+            data_store_identifier: None,
+            extensions_path: None,
+            use_https_scheme: false,
+            devtools: None,
+            background_color: None,
+            traffic_light_position: None,
+            background_throttling: None,
+            javascript_disabled: false,
+            allow_link_preview: true,
+            scroll_bar_style: ScrollBarStyle::Default,
+            general_autofill_enabled: true,
+            #[cfg(target_os = "ios")]
+            input_accessory_view_builder: None,
+            #[cfg(windows)]
+            environment: None,
+            #[cfg(any(
+                target_os = "linux",
+                target_os = "dragonfly",
+                target_os = "freebsd",
+                target_os = "netbsd",
+                target_os = "openbsd",
+            ))]
+            related_view: None,
+            #[cfg(target_os = "macos")]
+            webview_configuration: None,
+        }
+    }
+
+    /// Sets the user agent
+    #[must_use]
+    pub fn user_agent(mut self, user_agent: &str) -> Self {
+        self.user_agent = Some(user_agent.to_string());
+        self
+    }
+
+    /// Adds an init script for the main frame.
+    ///
+    /// When webview load a new page, this initialization code will be executed.
+    /// It is guaranteed that code is executed before `window.onload`.
+    ///
+    /// This is executed only on the main frame.
+    /// If you only want to run it in all frames, use [`Self::initialization_script_on_all_frames`] instead.
+    ///
+    /// ## Platform-specific
+    ///
+    /// - **Windows:** scripts are always added to subframes.
+    /// - **Android:** When [addDocumentStartJavaScript] is not supported,
+    ///   we prepend initialization scripts to each HTML head (implementation only supported on custom protocol URLs).
+    ///   For remote URLs, we use [onPageStarted] which is not guaranteed to run before other scripts.
+    ///
+    /// [addDocumentStartJavaScript]: https://developer.android.com/reference/androidx/webkit/WebViewCompat#addDocumentStartJavaScript(android.webkit.WebView,java.lang.String,java.util.Set%3Cjava.lang.String%3E)
+    /// [onPageStarted]: https://developer.android.com/reference/android/webkit/WebViewClient#onPageStarted(android.webkit.WebView,%20java.lang.String,%20android.graphics.Bitmap)
+    #[must_use]
+    pub fn initialization_script(mut self, script: impl Into<String>) -> Self {
+        self.initialization_scripts.push(InitializationScript {
+            script: script.into(),
+            for_main_frame_only: true,
+        });
+        self
+    }
+
+    /// Adds an init script for all frames.
+    ///
+    /// When webview load a new page, this initialization code will be executed.
+    /// It is guaranteed that code is executed before `window.onload`.
+    ///
+    /// This is executed on all frames, main frame and also sub frames.
+    /// If you only want to run it in the main frame, use [`Self::initialization_script`] instead.
+    ///
+    /// ## Platform-specific
+    ///
+    /// - **Windows:** scripts are always added to subframes.
+    /// - **Android:** When [addDocumentStartJavaScript] is not supported,
+    ///   we prepend initialization scripts to each HTML head (implementation only supported on custom protocol URLs).
+    ///   For remote URLs, we use [onPageStarted] which is not guaranteed to run before other scripts.
+    ///
+    /// [addDocumentStartJavaScript]: https://developer.android.com/reference/androidx/webkit/WebViewCompat#addDocumentStartJavaScript(android.webkit.WebView,java.lang.String,java.util.Set%3Cjava.lang.String%3E)
+    /// [onPageStarted]: https://developer.android.com/reference/android/webkit/WebViewClient#onPageStarted(android.webkit.WebView,%20java.lang.String,%20android.graphics.Bitmap)
+    #[must_use]
+    pub fn initialization_script_on_all_frames(mut self, script: impl Into<String>) -> Self {
+        self.initialization_scripts.push(InitializationScript {
+            script: script.into(),
+            for_main_frame_only: false,
+        });
+        self
+    }
+
+    /// Data directory for the webview.
+    #[must_use]
+    pub fn data_directory(mut self, data_directory: PathBuf) -> Self {
+        self.data_directory.replace(data_directory);
+        self
+    }
+
+    /// Disables the drag and drop handler. This is required to use HTML5 drag and drop APIs on the frontend on Windows.
+    #[must_use]
+    pub fn disable_drag_drop_handler(mut self) -> Self {
+        self.drag_drop_handler_enabled = false;
+        self
+    }
+
+    /// Enables clipboard access for the page rendered on **Linux** and **Windows**.
+    ///
+    /// **macOS** doesn't provide such method and is always enabled by default,
+    /// but you still need to add menu item accelerators to use shortcuts.
+    #[must_use]
+    pub fn enable_clipboard_access(mut self) -> Self {
+        self.clipboard = true;
+        self
+    }
+
+    /// Sets whether clicking an inactive window also clicks through to the webview.
+    #[must_use]
+    pub fn accept_first_mouse(mut self, accept: bool) -> Self {
+        self.accept_first_mouse = accept;
+        self
+    }
+
+    /// Sets additional browser arguments. **Windows Only**
+    #[must_use]
+    pub fn additional_browser_args(mut self, additional_args: &str) -> Self {
+        self.additional_browser_args = Some(additional_args.to_string());
+        self
+    }
+
+    /// Sets window effects
+    #[must_use]
+    pub fn window_effects(mut self, effects: WindowEffectsConfig) -> Self {
+        self.window_effects = Some(effects);
+        self
+    }
+
+    /// Enable or disable incognito mode for the WebView.
+    #[must_use]
+    pub fn incognito(mut self, incognito: bool) -> Self {
+        self.incognito = incognito;
+        self
+    }
+
+    /// Enable or disable transparency for the WebView.
+    #[cfg(any(not(target_os = "macos"), feature = "macos-private-api"))]
+    #[must_use]
+    pub fn transparent(mut self, transparent: bool) -> Self {
+        self.transparent = transparent;
+        self
+    }
+
+    /// Whether the webview should be focused or not.
+    #[must_use]
+    pub fn focused(mut self, focus: bool) -> Self {
+        self.focus = focus;
+        self
+    }
+
+    /// Sets the webview to automatically grow and shrink its size and position when the parent window resizes.
+    #[must_use]
+    pub fn auto_resize(mut self) -> Self {
+        self.auto_resize = true;
+        self
+    }
+
+    /// Enable proxy for the WebView
+    #[must_use]
+    pub fn proxy_url(mut self, url: Url) -> Self {
+        self.proxy_url = Some(url);
+        self
+    }
+
+    /// Whether page zooming by hotkeys is enabled
+    ///
+    /// ## Platform-specific:
+    ///
+    /// - **Windows**: Controls WebView2's [`IsZoomControlEnabled`](https://learn.microsoft.com/en-us/microsoft-edge/webview2/reference/winrt/microsoft_web_webview2_core/corewebview2settings?view=webview2-winrt-1.0.2420.47#iszoomcontrolenabled) setting.
+    /// - **MacOS / Linux**: Injects a polyfill that zooms in and out with `ctrl/command` + `-/=`,
+    ///   20% in each step, ranging from 20% to 1000%. Requires `webview:allow-set-webview-zoom` permission
+    ///
+    /// - **Android / iOS**: Unsupported.
+    #[must_use]
+    pub fn zoom_hotkeys_enabled(mut self, enabled: bool) -> Self {
+        self.zoom_hotkeys_enabled = enabled;
+        self
+    }
+
+    /// Whether browser extensions can be installed for the webview process
+    ///
+    /// ## Platform-specific:
+    ///
+    /// - **Windows**: Enables the WebView2 environment's [`AreBrowserExtensionsEnabled`](https://learn.microsoft.com/en-us/microsoft-edge/webview2/reference/winrt/microsoft_web_webview2_core/corewebview2environmentoptions?view=webview2-winrt-1.0.2739.15#arebrowserextensionsenabled)
+    /// - **MacOS / Linux / iOS / Android** - Unsupported.
+    #[must_use]
+    pub fn browser_extensions_enabled(mut self, enabled: bool) -> Self {
+        self.browser_extensions_enabled = enabled;
+        self
+    }
+
+    /// Sets whether the custom protocols should use `https://<scheme>.localhost` instead of the default `http://<scheme>.localhost` on Windows and Android. Defaults to `false`.
+    ///
+    /// ## Note
+    ///
+    /// Using a `https` scheme will NOT allow mixed content when trying to fetch `http` endpoints and therefore will not match the behavior of the `<scheme>://localhost` protocols used on macOS and Linux.
+    ///
+    /// ## Warning
+    ///
+    /// Changing this value between releases will change the IndexedDB, cookies and localstorage location and your app will not be able to access the old data.
+    #[must_use]
+    pub fn use_https_scheme(mut self, enabled: bool) -> Self {
+        self.use_https_scheme = enabled;
+        self
+    }
+
+    /// Whether web inspector, which is usually called browser devtools, is enabled or not. Enabled by default.
+    ///
+    /// This API works in **debug** builds, but requires `devtools` feature flag to enable it in **release** builds.
+    ///
+    /// ## Platform-specific
+    ///
+    /// - macOS: This will call private functions on **macOS**.
+    /// - Android: Open `chrome://inspect/#devices` in Chrome to get the devtools window. Wry's `WebView` devtools API isn't supported on Android.
+    /// - iOS: Open Safari > Develop > [Your Device Name] > [Your WebView] to get the devtools window.
+    #[must_use]
+    pub fn devtools(mut self, enabled: Option<bool>) -> Self {
+        self.devtools = enabled;
+        self
+    }
+
+    /// Set the window and webview background color.
+    /// ## Platform-specific:
+    ///
+    /// - **Windows**: On Windows 7, alpha channel is ignored for the webview layer.
+    /// - **Windows**: On Windows 8 and newer, if alpha channel is not `0`, it will be ignored.
+    #[must_use]
+    pub fn background_color(mut self, color: Color) -> Self {
+        self.background_color = Some(color);
+        self
+    }
+
+    /// Change the position of the window controls. Available on macOS only.
+    ///
+    /// Requires titleBarStyle: Overlay and decorations: true.
+    ///
+    /// ## Platform-specific
+    ///
+    /// - **Linux / Windows / iOS / Android:** Unsupported.
+    #[must_use]
+    pub fn traffic_light_position(mut self, position: dpi::Position) -> Self {
+        self.traffic_light_position = Some(position);
+        self
+    }
+
+    /// Whether to show a link preview when long pressing on links. Available on macOS and iOS only.
+    ///
+    /// Default is true.
+    ///
+    /// See https://docs.rs/objc2-web-kit/latest/objc2_web_kit/struct.WKWebView.html#method.allowsLinkPreview
+    ///
+    /// ## Platform-specific
+    ///
+    /// - **Linux / Windows / Android:** Unsupported.
+    #[must_use]
+    pub fn allow_link_preview(mut self, allow_link_preview: bool) -> Self {
+        self.allow_link_preview = allow_link_preview;
+        self
+    }
+
+    /// Change the default background throttling behavior.
+    ///
+    /// By default, browsers use a suspend policy that will throttle timers and even unload
+    /// the whole tab (view) to free resources after roughly 5 minutes when a view became
+    /// minimized or hidden. This will pause all tasks until the documents visibility state
+    /// changes back from hidden to visible by bringing the view back to the foreground.
+    ///
+    /// ## Platform-specific
+    ///
+    /// - **Linux / Windows / Android**: Unsupported. Workarounds like a pending WebLock transaction might suffice.
+    /// - **iOS**: Supported since version 17.0+.
+    /// - **macOS**: Supported since version 14.0+.
+    ///
+    /// see <https://github.com/tauri-apps/tauri/issues/5250#issuecomment-2569380578>
+    #[must_use]
+    pub fn background_throttling(mut self, policy: Option<BackgroundThrottlingPolicy>) -> Self {
+        self.background_throttling = policy;
+        self
+    }
+
+    /// Specifies the native scrollbar style to use with the webview.
+    /// CSS styles that modify the scrollbar are applied on top of the native appearance configured here.
+    ///
+    /// Defaults to [`ScrollBarStyle::Default`], which is the browser default.
+    ///
+    /// ## Platform-specific
+    ///
+    /// - **Windows**:
+    ///   - [`ScrollBarStyle::FluentOverlay`] requires WebView2 Runtime version 125.0.2535.41 or higher,
+    ///     and does nothing on older versions.
+    ///   - This option must be given the same value for all webviews that target the same data directory. Use
+    ///     [`WebviewAttributes::data_directory`] to change data directories if needed.
+    /// - **Linux / Android / iOS / macOS**: Unsupported. Only supports `Default` and performs no operation.
+    #[must_use]
+    pub fn scroll_bar_style(mut self, style: ScrollBarStyle) -> Self {
+        self.scroll_bar_style = style;
+        self
+    }
+
+    /// Controls the WebView's browser-level general autofill behavior.
+    ///
+    /// **This option does not disable password or credit card autofill.**
+    ///
+    /// When set to `false`, the WebView will not automatically populate
+    /// general form fields using previously stored data such as addresses
+    /// or contact information.
+    ///
+    /// By default, this is `true`.
+    ///
+    /// ## Platform-specific
+    ///
+    /// - **Windows**: Supported. WebView2's autofill feature (called
+    ///   "Suggestions") may not honor `autocomplete="off"` on input
+    ///   elements in some cases.
+    /// - **Linux / Android / iOS / macOS**: Unsupported and performs no
+    ///   operation.
+    #[must_use]
+    pub fn general_autofill_enabled(mut self, enabled: bool) -> Self {
+        self.general_autofill_enabled = enabled;
+        self
+    }
+}
+
+/// IPC handler.
+pub type WebviewIpcHandler = Box<dyn Fn(WebViewMetaData, Request<String>) + Send>;
+
+/// An initialization script
+#[derive(Debug, Clone)]
+pub struct InitializationScript {
+    /// The script to run
+    pub script: String,
+    /// Whether the script should be injected to main frame only
+    pub for_main_frame_only: bool,
+}
+)
+internal.rs(use crate::types::{BackgroundThrottlingPolicy, DownloadEvent, ScrollBarStyle};
+use crate::utils::parse_proxy_url;
+use crate::{
+    builder::{WebviewAttributes, WebviewIpcHandler},
+    manager::Manager,
+    types::{
+        DocumentTitleChangedHandler, DownloadHandler, DragDropEvent, IpcHandler, NavigationHandler,
+        NewWindowHandler, OnPageLoadHandler, ProxyHandler, SynthesizedEvent,
+        UriSchemeProtocolHandler, WebContext, WebResourceRequestHandler, WebView, WebViewMetaData,
+        WebviewBounds, WebviewId,
+    },
+    wrapper::RectWrapper,
+};
+use dpi::{LogicalPosition, PhysicalPosition};
+use std::borrow::Cow;
+use std::collections::HashMap;
+use std::collections::hash_map::Entry::{Occupied, Vacant};
+use std::{
+    collections::HashSet,
+    rc::Rc,
+    sync::{Arc, Mutex},
+};
+use tao::window::{Theme as TaoTheme, Window, WindowId};
+#[cfg(windows)]
+use wry::WebViewBuilderExtWindows;
+use wry::{DragDropEvent as WryDragDropEvent, WebViewBuilder};
+use wry::{ScrollBarStyle as WryScrollBarStyle, WebContext as WryWebContext};
+
+#[cfg(windows)]
+use wry::WebViewExtWindows;
+
+/// A webview that has yet to be built.
+pub struct PendingWebview {
+    /// The label that the webview will be named.
+    pub label: String,
+    pub kind: bool,
+    /// The [`WebviewAttributes`] that the webview will be created with.
+    pub webview_attributes: WebviewAttributes,
+    pub(crate) uri_scheme_protocols: HashMap<String, Box<UriSchemeProtocolHandler>>,
+    pub url: String,
+    /// How to handle IPC calls on the webview.
+    pub ipc_handler: Option<WebviewIpcHandler>,
+
+    /// A handler to decide if incoming url is allowed to navigate.
+    pub navigation_handler: Option<Box<NavigationHandler>>,
+
+    pub new_window_handler: Option<Box<NewWindowHandler>>,
+
+    pub document_title_changed_handler: Option<Box<DocumentTitleChangedHandler>>,
+
+    #[cfg(target_os = "android")]
+    #[allow(clippy::type_complexity)]
+    pub on_webview_created: Option<
+        Box<dyn Fn(CreationContext<'_, '_>) -> Result<(), jni::errors::Error> + Send + Sync>,
+    >,
+
+    pub web_resource_request_handler: Option<Box<WebResourceRequestHandler>>,
+
+    pub on_page_load_handler: Option<Box<OnPageLoadHandler>>,
+
+    pub download_handler: Option<Arc<DownloadHandler>>,
+
+    #[cfg(any(target_os = "macos", target_os = "ios"))]
+    pub on_web_content_process_terminate_handler: Option<Box<OnWebContentProcessTerminateHandler>>,
+
+    pub proxy_handler: Option<ProxyHandler>,
+}
+
+impl PendingWebview {
+    pub fn new<L>(label: L, kind: bool, webview_attributes: WebviewAttributes) -> Self
+    where
+        L: Into<String>,
+    {
+        Self {
+            label: label.into(),
+            kind,
+            webview_attributes,
+
+            url: "taurino://localhost".into(),
+            uri_scheme_protocols:HashMap::new(),
+            ipc_handler: None,
+            navigation_handler: None,
+            new_window_handler: None,
+            document_title_changed_handler: None,
+
+            #[cfg(target_os = "android")]
+            on_webview_created: None,
+
+            web_resource_request_handler: None,
+            on_page_load_handler: None,
+            download_handler: None,
+
+            #[cfg(any(target_os = "macos", target_os = "ios"))]
+            on_web_content_process_terminate_handler: None,
+
+            proxy_handler: None,
+        }
+    }
+    pub(crate) fn internal_register_uri_scheme_protocol<
+        N: Into<String>,
+        H: Fn(
+                &str,
+                http::Request<Vec<u8>>,
+                Box<dyn FnOnce(http::Response<Cow<'static, [u8]>>) + Send>,
+            ) + Send
+            + Sync
+            + 'static,
+    >(
+        &mut self,
+        uri_scheme: N,
+        protocol_handler: H,
+    ) {
+        let uri_scheme = uri_scheme.into();
+
+        self.uri_scheme_protocols
+            .insert(uri_scheme, Box::new(protocol_handler));
+    }
+}
+
+pub(crate) fn build_internal(
+    window_label: String,
+    window: &Window,
+    pending: PendingWebview,
+    manager: &mut Manager,
+) -> crate::Result<WebView> {
+    let focused_webview = Arc::new(Mutex::new(None::<String>));
+    let window_id = manager.window_id.clone();
+    let webviews_store = manager.webviews_store();
+
+    let id = manager.next_webview_id();
+    let _event_id = manager.next_webview_event_id();
+
+    /*     if !manager.webview_runtime_installed {
+        #[cfg(all(not(debug_assertions), windows))]
+        dialog::error(
+            r#"Could not find the WebView2 Runtime.
+
+        Make sure it is installed or download it from <A href="https://developer.microsoft.com/en-us/microsoft-edge/webview2">https://developer.microsoft.com/en-us/microsoft-edge/webview2</A>
+
+        You may have it installed on another user account, but it is not available for this one.
+        "#,
+        );
+
+        if cfg!(target_os = "macos") {
+            log::warn!("WebKit webview runtime not found, attempting to create webview anyway.");
+        } else {
+            return Err(crate::Error::WebviewRuntimeNotInstalled);
+        }
+    } */
+    #[allow(unused_mut)]
+    let PendingWebview {
+        label,
+        kind,
+        webview_attributes,
+        url,
+        ipc_handler,
+        navigation_handler,
+        new_window_handler,
+        document_title_changed_handler,
+        web_resource_request_handler:_,
+        on_page_load_handler,
+        download_handler,
+        proxy_handler,
+        uri_scheme_protocols
+    } = pending;
+
+    let mut web_context = manager
+        .web_context()
+        .lock()
+        .expect("poisoned WebContext store");
+    let is_first_context = web_context.is_empty();
+    let automation_enabled = std::env::var("TAURI_WEBVIEW_AUTOMATION").as_deref() == Ok("true");
+    let web_context_key = webview_attributes.data_directory;
+
+    let entry = web_context.entry(web_context_key.clone());
+    let web_context = match entry {
+        Occupied(occupied) => {
+            let occupied = occupied.into_mut();
+            occupied.referenced_by_webviews.insert(label.clone());
+            occupied
+        }
+        Vacant(vacant) => {
+            let mut web_context = WryWebContext::new(web_context_key.clone());
+            web_context.set_allows_automation(if automation_enabled {
+                is_first_context
+            } else {
+                false
+            });
+            vacant.insert(WebContext {
+                inner: web_context,
+                referenced_by_webviews: [label.clone()].into(),
+                registered_custom_protocols: HashSet::new(),
+            })
+        }
+    };
+
+    let mut webview_builder = WebViewBuilder::new_with_web_context(&mut web_context.inner)
+        .with_id(&label)
+        .with_focused(webview_attributes.focus)
+        .with_transparent(webview_attributes.transparent)
+        .with_accept_first_mouse(webview_attributes.accept_first_mouse)
+        .with_incognito(webview_attributes.incognito)
+        .with_clipboard(webview_attributes.clipboard)
+        .with_hotkeys_zoom(webview_attributes.zoom_hotkeys_enabled)
+        .with_general_autofill_enabled(webview_attributes.general_autofill_enabled);
+
+    #[cfg(target_os = "macos")]
+    if let Some(webview_configuration) = webview_attributes.webview_configuration {
+        webview_builder = webview_builder.with_webview_configuration(webview_configuration);
+    }
+
+    if let Some(background_throttling) = webview_attributes.background_throttling {
+        webview_builder = webview_builder.with_background_throttling(match background_throttling {
+            BackgroundThrottlingPolicy::Disabled => wry::BackgroundThrottlingPolicy::Disabled,
+            BackgroundThrottlingPolicy::Suspend => wry::BackgroundThrottlingPolicy::Suspend,
+            BackgroundThrottlingPolicy::Throttle => wry::BackgroundThrottlingPolicy::Throttle,
+        });
+    }
+
+    if webview_attributes.javascript_disabled {
+        webview_builder = webview_builder.with_javascript_disabled();
+    }
+
+    if let Some(color) = webview_attributes.background_color {
+        webview_builder = webview_builder.with_background_color(color.into());
+    }
+    if let Some(navigation_handler) = navigation_handler {
+        webview_builder = webview_builder.with_navigation_handler(move |url| {
+            url.parse()
+                .map(|url| navigation_handler(&url))
+                .unwrap_or(true)
+        });
+    }
+
+    if let Some(new_window_handler) = new_window_handler {
+        let webviews_store = Arc::clone(&webviews_store);
+        let current_window_id = window_id.clone();
+
+        webview_builder = webview_builder.with_new_window_req_handler(move |url, features| {
+            let Ok(url) = url.parse() else {
+                return wry::NewWindowResponse::Deny;
+            };
+
+            let response = new_window_handler(
+                url,
+                crate::types::NewWindowFeatures::new(
+                    features.size,
+                    features.position,
+                    crate::types::NewWindowOpener {
+                        webview: features.opener.webview,
+
+                        #[cfg(windows)]
+                        environment: features.opener.environment,
+
+                        #[cfg(target_os = "macos")]
+                        target_configuration: features.opener.target_configuration,
+                    },
+                ),
+            );
+
+            match response {
+                crate::types::NewWindowResponse::Allow => wry::NewWindowResponse::Allow,
+
+                crate::types::NewWindowResponse::Deny => wry::NewWindowResponse::Deny,
+
+                #[cfg(not(any(target_os = "android", target_os = "ios")))]
+                crate::types::NewWindowResponse::Create { window_id } => {
+                    let Some(this_window_id) = *current_window_id.lock().unwrap() else {
+                        return wry::NewWindowResponse::Deny;
+                    };
+
+                    if window_id != this_window_id {
+                        return wry::NewWindowResponse::Deny;
+                    }
+
+                    let target_webview = {
+                        let webviews = webviews_store.lock().expect("poisoned webview manager");
+
+                        webviews.values().next().cloned()
+                    };
+
+                    let Some(target_webview) = target_webview else {
+                        return wry::NewWindowResponse::Deny;
+                    };
+
+                    wry::NewWindowResponse::Create {
+                        #[cfg(target_os = "macos")]
+                        webview: wry::WebViewExtMacOS::webview(&*target_webview)
+                            .as_super()
+                            .into(),
+
+                        #[cfg(any(
+                            target_os = "linux",
+                            target_os = "dragonfly",
+                            target_os = "freebsd",
+                            target_os = "netbsd",
+                            target_os = "openbsd",
+                        ))]
+                        webview: target_webview.webview(),
+
+                        #[cfg(windows)]
+                        webview: target_webview.webview(),
+                    }
+                }
+            }
+        });
+    }
+    if let Some(document_title_changed_handler) = document_title_changed_handler {
+        webview_builder =
+            webview_builder.with_document_title_changed_handler(document_title_changed_handler)
+    }
+
+    let webview_bounds = if let Some(bounds) = webview_attributes.bounds {
+        let bounds: RectWrapper = bounds.into();
+        let bounds = bounds.0;
+
+        let scale_factor = window.scale_factor();
+        let position = bounds.position.to_logical::<f32>(scale_factor);
+        let size = bounds.size.to_logical::<f32>(scale_factor);
+
+        webview_builder = webview_builder.with_bounds(bounds);
+
+        let window_size = window.inner_size().to_logical::<f32>(scale_factor);
+
+        if webview_attributes.auto_resize {
+            Some(WebviewBounds {
+                x_rate: position.x / window_size.width,
+                y_rate: position.y / window_size.height,
+                width_rate: size.width / window_size.width,
+                height_rate: size.height / window_size.height,
+            })
+        } else {
+            None
+        }
+    } else {
+        if kind {
+            webview_builder = webview_builder.with_bounds(wry::Rect {
+                position: LogicalPosition::new(0, 0).into(),
+                size: window.inner_size().into(),
+            });
+            Some(WebviewBounds {
+                x_rate: 0.,
+                y_rate: 0.,
+                width_rate: 1.,
+                height_rate: 1.,
+            })
+        } else {
+            None
+        }
+    };
+
+    if let Some(download_handler) = download_handler {
+        let download_handler_ = download_handler.clone();
+        webview_builder = webview_builder.with_download_started_handler(move |url, path| {
+            if let Ok(url) = url.parse() {
+                download_handler_(DownloadEvent::Requested {
+                    url,
+                    destination: path,
+                })
+            } else {
+                false
+            }
+        });
+        webview_builder =
+            webview_builder.with_download_completed_handler(move |url, path, success| {
+                if let Ok(url) = url.parse() {
+                    download_handler(DownloadEvent::Finished { url, path, success });
+                }
+            });
+    }
+
+    if let Some(page_load_handler) = on_page_load_handler {
+        webview_builder = webview_builder.with_on_page_load_handler(move |event, url| {
+            let _ = url.parse().map(|url| {
+                page_load_handler(
+                    url,
+                    match event {
+                        wry::PageLoadEvent::Started => crate::types::PageLoadEvent::Started,
+                        wry::PageLoadEvent::Finished => crate::types::PageLoadEvent::Finished,
+                    },
+                )
+            });
+        });
+    }
+
+    if let Some(user_agent) = webview_attributes.user_agent {
+        webview_builder = webview_builder.with_user_agent(&user_agent);
+    }
+
+    if let Some(proxy_url) = webview_attributes.proxy_url {
+        let config = parse_proxy_url(&proxy_url)?;
+
+        webview_builder = webview_builder.with_proxy_config(config);
+    }
+
+    {
+        if let Some(additional_browser_args) = webview_attributes.additional_browser_args {
+            webview_builder =
+                webview_builder.with_additional_browser_args(&additional_browser_args);
+        }
+
+        if let Some(environment) = webview_attributes.environment {
+            webview_builder = webview_builder.with_environment(environment);
+        }
+
+        webview_builder = webview_builder.with_theme(match window.theme() {
+            TaoTheme::Dark => wry::Theme::Dark,
+            TaoTheme::Light => wry::Theme::Light,
+            _ => wry::Theme::Light,
+        });
+
+        webview_builder =
+            webview_builder.with_scroll_bar_style(match webview_attributes.scroll_bar_style {
+                ScrollBarStyle::Default => WryScrollBarStyle::Default,
+                ScrollBarStyle::FluentOverlay => WryScrollBarStyle::FluentOverlay,
+                #[allow(unreachable_patterns)]
+                _ => unreachable!(),
+            });
+    }
+
+    #[cfg(windows)]
+    {
+        webview_builder = webview_builder
+            .with_browser_extensions_enabled(webview_attributes.browser_extensions_enabled);
+    }
+
+    #[cfg(any(
+        windows,
+        target_os = "linux",
+        target_os = "dragonfly",
+        target_os = "freebsd",
+        target_os = "netbsd",
+        target_os = "openbsd"
+    ))]
+    {
+        if let Some(path) = &webview_attributes.extensions_path {
+            webview_builder = webview_builder.with_extensions_path(path);
+        }
+    }
+
+    #[cfg(any(
+        target_os = "linux",
+        target_os = "dragonfly",
+        target_os = "freebsd",
+        target_os = "netbsd",
+        target_os = "openbsd"
+    ))]
+    {
+        if let Some(related_view) = webview_attributes.related_view {
+            webview_builder = webview_builder.with_related_view(related_view);
+        }
+    }
+
+    #[cfg(any(target_os = "macos", target_os = "ios"))]
+    {
+        if let Some(data_store_identifier) = &webview_attributes.data_store_identifier {
+            webview_builder = webview_builder.with_data_store_identifier(*data_store_identifier);
+        }
+    }
+    if let Some(handler) = proxy_handler.as_ref().cloned() {
+        if webview_attributes.drag_drop_handler_enabled {
+            let window_id_ = window_id.clone();
+
+            webview_builder = webview_builder.with_drag_drop_handler(move |event| {
+                let event = match event {
+                    WryDragDropEvent::Enter {
+                        paths,
+                        position: (x, y),
+                    } => DragDropEvent::Enter {
+                        paths,
+                        position: PhysicalPosition::new(x as _, y as _),
+                    },
+
+                    WryDragDropEvent::Over { position: (x, y) } => DragDropEvent::Over {
+                        position: PhysicalPosition::new(x as _, y as _),
+                    },
+
+                    WryDragDropEvent::Drop {
+                        paths,
+                        position: (x, y),
+                    } => DragDropEvent::Drop {
+                        paths,
+                        position: PhysicalPosition::new(x as _, y as _),
+                    },
+
+                    WryDragDropEvent::Leave => DragDropEvent::Leave,
+
+                    _ => return true,
+                };
+
+                let message = if !kind {
+                    SynthesizedEvent::window_drag_drop(event)
+                } else {
+                    SynthesizedEvent::webview_drag_drop(event)
+                };
+
+                let Some(window_id) = *window_id_.lock().unwrap() else {
+                    return true;
+                };
+
+                handler(window_id, id, message);
+                true
+            });
+        }
+    }
+
+    #[cfg(target_os = "ios")]
+    {
+        if let Some(input_accessory_view_builder) = webview_attributes.input_accessory_view_builder
+        {
+            webview_builder = webview_builder.with_input_accessory_view_builder(move |webview| {
+                input_accessory_view_builder.0(webview)
+            });
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        if let Some(position) = &webview_attributes.traffic_light_position {
+            webview_builder = webview_builder.with_traffic_light_inset(*position);
+        }
+    }
+
+    webview_builder = webview_builder.with_ipc_handler(create_ipc_handler(
+        kind,
+        window_label,
+        label.clone(),
+        window_id.clone(),
+        id,
+        ipc_handler,
+    ));
+
+    for script in webview_attributes.initialization_scripts {
+        webview_builder = webview_builder
+            .with_initialization_script_for_main_only(script.script, script.for_main_frame_only);
+    }
+
+    for (scheme, protocol) in uri_scheme_protocols {
+        let scheme = scheme.clone();
+
+        webview_builder = webview_builder.with_asynchronous_custom_protocol(
+            scheme,
+            move |webview_id, request, responder| {
+                protocol(
+                    webview_id,
+                    request,
+                    Box::new(move |response| responder.respond(response)),
+                )
+            },
+        );
+    }
+
+    #[cfg(any(debug_assertions, feature = "devtools"))]
+    {
+        webview_builder =
+            webview_builder.with_devtools(webview_attributes.devtools.unwrap_or(true));
+    }
+
+    if url != "about:blank" {
+        webview_builder = webview_builder.with_url(&url);
+    }
+
+    let webview = match kind {
+        #[cfg(not(any(
+            target_os = "windows",
+            target_os = "macos",
+            target_os = "ios",
+            target_os = "android"
+        )))]
+        true => {
+            // only way to account for menu bar height, and also works for multiwebviews :)
+            let vbox = window.default_vbox().unwrap();
+            webview_builder.build_gtk(vbox)
+        }
+        #[cfg(any(
+            target_os = "windows",
+            target_os = "macos",
+            target_os = "ios",
+            target_os = "android"
+        ))]
+        true => webview_builder.build_as_child(&window),
+        false => {
+            #[cfg(any(
+                target_os = "windows",
+                target_os = "macos",
+                target_os = "ios",
+                target_os = "android"
+            ))]
+            let builder = webview_builder.build(&window);
+            #[cfg(not(any(
+                target_os = "windows",
+                target_os = "macos",
+                target_os = "ios",
+                target_os = "android"
+            )))]
+            let builder = {
+                let vbox = window.default_vbox().unwrap();
+                webview_builder.build_gtk(vbox)
+            };
+            builder
+        }
+    }
+    .map_err(|e| crate::Error::CreateWebview(Box::new(e)))?;
+
+    #[cfg(windows)]
+    {
+        let controller = webview.controller();
+
+        let proxy_handler = proxy_handler.as_ref().cloned();
+        let webview_id = id;
+
+        if let Some(handler) = proxy_handler {
+            use webview2_com::{
+                ContainsFullScreenElementChangedEventHandler, FocusChangedEventHandler,
+            };
+
+            // GotFocus ---------------------------------------------------------
+            {
+                let handler = handler.clone();
+                let label_ = label.clone();
+                let focused_webview_ = focused_webview.clone();
+                let window_id_ = window_id.clone();
+
+                let mut got_focus_token = Default::default();
+
+                unsafe {
+                    controller.add_GotFocus(
+                        &FocusChangedEventHandler::create(Box::new(move |_, _| {
+                            let mut focused_webview = focused_webview_.lock().unwrap();
+
+                            // Multi-webview mode:
+                            // If any webview is already focused, this is only a webview-to-webview focus change.
+                            // If no webview is focused yet, this is a real window focus change.
+                            let already_focused = focused_webview.is_some();
+
+                            focused_webview.replace(label_.clone());
+
+                            if !already_focused {
+                                let Some(window_id) = *window_id_.lock().unwrap() else {
+                                    return Ok(());
+                                };
+
+                                handler(
+                                    window_id,
+                                    webview_id,
+                                    SynthesizedEvent::window_focus_changed(true),
+                                );
+                            }
+
+                            Ok(())
+                        })),
+                        &mut got_focus_token,
+                    )
+                }
+                .unwrap();
+            }
+
+            // LostFocus --------------------------------------------------------
+            {
+                let handler = handler.clone();
+                let label_ = label.clone();
+                let focused_webview_ = focused_webview.clone();
+                let window_id_ = window_id.clone();
+
+                let mut lost_focus_token = Default::default();
+
+                unsafe {
+                    controller.add_LostFocus(
+                        &FocusChangedEventHandler::create(Box::new(move |_, _| {
+                            let mut focused_webview = focused_webview_.lock().unwrap();
+
+                            // Multi-webview mode:
+                            // If another webview got focus before this LostFocus event,
+                            // focused_webview contains the other webview label.
+                            // Then this is NOT a real window focus loss.
+                            let lost_window_focus =
+                                focused_webview.as_ref().map_or(true, |w| w == &label_);
+
+                            if lost_window_focus {
+                                // Only reset when the whole window lost focus.
+                                // Otherwise another webview is focused now.
+                                *focused_webview = None;
+
+                                let Some(window_id) = *window_id_.lock().unwrap() else {
+                                    return Ok(());
+                                };
+
+                                handler(
+                                    window_id,
+                                    webview_id,
+                                    SynthesizedEvent::window_focus_changed(true),
+                                );
+                            }
+
+                            Ok(())
+                        })),
+                        &mut lost_focus_token,
+                    )
+                }
+                .unwrap();
+            }
+
+            // Fullscreen -------------------------------------------------------
+            if let Ok(core_webview) = unsafe { controller.CoreWebView2() } {
+                let handler = handler.clone();
+                let window_id_ = window_id.clone();
+
+                let mut fullscreen_token = Default::default();
+
+                unsafe {
+                    let _ = core_webview.add_ContainsFullScreenElementChanged(
+                        &ContainsFullScreenElementChangedEventHandler::create(Box::new(
+                            move |sender, _| {
+                                let mut contains_fullscreen_element =
+                                    windows::core::BOOL::default();
+
+                                sender
+                                    .ok_or_else(windows::core::Error::empty)?
+                                    .ContainsFullScreenElement(&mut contains_fullscreen_element)?;
+
+                                let Some(window_id) = *window_id_.lock().unwrap() else {
+                                    return Ok(());
+                                };
+
+                                handler(
+                                    window_id,
+                                    webview_id,
+                                    SynthesizedEvent::window_fullscreen_changed(
+                                        contains_fullscreen_element.as_bool(),
+                                    ),
+                                );
+                                Ok(())
+                            },
+                        )),
+                        &mut fullscreen_token,
+                    );
+                }
+            }
+        }
+    }
+
+    Ok(WebView {
+        label,
+        id,
+        inner: Rc::new(webview),
+        context_store: manager.web_context().clone(),
+        /*  webview_event_listeners: Default::default(), */
+        context_key: if automation_enabled {
+            None
+        } else {
+            web_context_key
+        },
+        bounds: Arc::new(Mutex::new(webview_bounds)),
+    })
+}
+
+/// Create a wry ipc handler from a tauri ipc handler.
+fn create_ipc_handler(
+    kind: bool,
+    window_label: String,
+    webview_label: String,
+    window_id: Arc<Mutex<Option<WindowId>>>,
+    webview_id: WebviewId,
+    ipc_handler: Option<WebviewIpcHandler>,
+) -> Box<IpcHandler> {
+    Box::new(move |request| {
+        if let Some(handler) = &ipc_handler {
+            let window_id_guard = window_id.lock().unwrap();
+
+            let Some(window_id) = *window_id_guard else {
+                return;
+            };
+
+            let metadata = WebViewMetaData::new(
+                &kind,
+                window_label.as_str(),
+                webview_label.as_str(),
+                &window_id,
+                &webview_id,
+            );
+
+            handler(metadata, request);
+        }
+    })
+}
+)
+manager.rs(use std::{
+    borrow::Cow,
+    collections::{HashMap, HashSet},
+    path::PathBuf,
+    sync::{
+        Arc, Mutex, MutexGuard,
+        atomic::{AtomicU32, Ordering},
+    },
+};
+
+use dpi::{LogicalPosition, LogicalSize};
+use tao::window::{Window, WindowId};
+use url::Url;
+
+use crate::{
+    internal::{PendingWebview, build_internal},
+    types::{
+        FrontendDist, WebContextStore, WebView, WebviewId, WebviewUrl,
+    },
+    utils::is_local_network_url,
+};
+
+const APP_PROTOCOL: &str = "taurino";
+const IPC_PROTOCOL: &str = "ipc";
+
+type ManagerUriSchemeResponderFn =
+    Box<dyn FnOnce(http::Response<Cow<'static, [u8]>>) + Send + 'static>;
+
+type ManagerUriSchemeHandler = dyn for<'a> Fn(ManagerUriSchemeContext<'a>, http::Request<Vec<u8>>, ManagerUriSchemeResponder)
+    + Send
+    + Sync
+    + 'static;
+
+/// Async URI scheme protocol responder.
+pub struct ManagerUriSchemeResponder(ManagerUriSchemeResponderFn);
+
+impl ManagerUriSchemeResponder {
+    /// Resolves the request with the given response.
+    pub fn respond<T>(self, response: http::Response<T>)
+    where
+        T: Into<Cow<'static, [u8]>>,
+    {
+        let (parts, body) = response.into_parts();
+        let response = http::Response::from_parts(parts, body.into());
+
+        (self.0)(response);
+    }
+}
+
+/// URI scheme protocol context.
+#[derive(Clone, Copy, Debug)]
+pub struct ManagerUriSchemeContext<'a> {
+    window_label: &'a str,
+    webview_label: &'a str,
+}
+
+impl<'a> ManagerUriSchemeContext<'a> {
+    pub fn new(window_label: &'a str, webview_label: &'a str) -> Self {
+        Self {
+            window_label,
+            webview_label,
+        }
+    }
+
+    /// Get the window label that owns the webview.
+    pub fn window_label(&self) -> &'a str {
+        self.window_label
+    }
+
+    /// Get the webview label that made the URI scheme request.
+    pub fn webview_label(&self) -> &'a str {
+        self.webview_label
+    }
+}
+
+/// Uses a custom URI scheme handler to resolve file requests.
+pub struct ManagerUriSchemeProtocol {
+    handler: Box<ManagerUriSchemeHandler>,
+}
+
+impl ManagerUriSchemeProtocol {
+    pub fn new<F>(handler: F) -> Self
+    where
+        F: for<'a> Fn(
+                ManagerUriSchemeContext<'a>,
+                http::Request<Vec<u8>>,
+                ManagerUriSchemeResponder,
+            ) + Send
+            + Sync
+            + 'static,
+    {
+        Self {
+            handler: Box::new(handler),
+        }
+    }
+
+    pub fn handle(
+        &self,
+        context: ManagerUriSchemeContext<'_>,
+        request: http::Request<Vec<u8>>,
+        responder: ManagerUriSchemeResponder,
+    ) {
+        (self.handler)(context, request, responder);
+    }
+}
+
+pub struct Manager {
+    window_label: Arc<str>,
+    pub window_id: Arc<Mutex<Option<WindowId>>>,
+
+    pub webviews: Arc<Mutex<HashMap<String, WebView>>>,
+
+    uri_scheme_protocols: Mutex<HashMap<String, Arc<ManagerUriSchemeProtocol>>>,
+    /// Custom protocols to register on the webview
+    
+    frontend_dist: Option<FrontendDist>,
+    web_context: WebContextStore,
+
+    next_webview_id: Arc<AtomicU32>,
+    next_webview_event_id: Arc<AtomicU32>,
+
+    pub webview_runtime_installed: bool,
+}
+impl Manager {
+    pub fn new() -> crate::Result<Self> {
+        Ok(Self {
+            window_label: Arc::from("root"),
+            window_id: Arc::new(Mutex::new(None)),
+            webviews: Arc::new(Mutex::new(HashMap::new())),
+            uri_scheme_protocols: Mutex::new(HashMap::new()),
+            frontend_dist: None,
+            web_context: Default::default(),
+            next_webview_id: Arc::new(AtomicU32::new(0)),
+            next_webview_event_id: Arc::new(AtomicU32::new(0)),
+            webview_runtime_installed: wry::webview_version().is_ok(),
+        })
+    }
+
+    pub fn set_window_label<S>(mut self, window_label: S) -> Self
+    where
+        S: Into<Arc<str>>,
+    {
+        self.window_label = window_label.into();
+        self
+    }
+
+    pub fn set_window_id(self, window_id: WindowId) -> Self {
+        *self.window_id.lock().expect("poisoned window id manager") = Some(window_id);
+
+        self
+    }
+
+    pub fn with_dev_server_url(mut self, url: &str) -> crate::Result<Self> {
+        let url = Url::parse(url).map_err(crate::Error::InvalidUrl)?;
+        self.frontend_dist = Some(FrontendDist::Url(url));
+        Ok(self)
+    }
+
+    pub fn set_static_dir<P: Into<PathBuf>>(mut self, path: P) -> Self {
+        self.frontend_dist = Some(FrontendDist::Directory(path.into()));
+        self
+    }
+    pub fn set_frontend_dist(mut self, path: FrontendDist) -> Self {
+        self.frontend_dist = Some(path);
+        self
+    }
+
+    pub fn set_static_files(mut self, files: Vec<PathBuf>) -> Self {
+        self.frontend_dist = Some(FrontendDist::Files(files));
+        self
+    }
+
+    pub(crate) fn next_webview_id(&self) -> WebviewId {
+        self.next_webview_id.fetch_add(1, Ordering::Relaxed)
+    }
+
+    pub(crate) fn next_webview_event_id(&self) -> u32 {
+        self.next_webview_event_id.fetch_add(1, Ordering::Relaxed)
+    }
+    #[allow(dead_code)]
+    fn webview_runtime_installed(&self) -> bool {
+        self.webview_runtime_installed
+    }
+
+    pub(crate) fn web_context(&self) -> &WebContextStore {
+        &self.web_context
+    }
+
+    /// Get a locked handle to the webviews.
+    fn webviews_lock(&self) -> MutexGuard<'_, HashMap<String, WebView>> {
+        self.webviews.lock().expect("poisoned webview manager")
+    }
+
+    pub(crate) fn webviews_store(&self) -> Arc<Mutex<HashMap<String, WebView>>> {
+        Arc::clone(&self.webviews)
+    }
+
+    /// Get the base app URL.
+    ///
+    /// - If `frontend_dist` is an URL, this URL is returned.
+    /// - Otherwise the custom app protocol URL is returned.
+    fn get_app_url(&self, https: bool) -> Cow<'_, Url> {
+        match self.frontend_dist.as_ref() {
+            Some(FrontendDist::Url(url)) => Cow::Borrowed(url),
+            _ => self.taurino_protocol_url(https),
+        }
+    }
+
+    /// The custom protocol URL used to serve embedded assets.
+    ///
+    /// Returns:
+    /// - `taurino://localhost`
+    /// - or on Windows/Android:
+    ///   - `http://taurino.localhost`
+    ///   - `https://taurino.localhost`
+    fn taurino_protocol_url(&self, https: bool) -> Cow<'_, Url> {
+        if cfg!(windows) || cfg!(target_os = "android") {
+            let scheme = if https { "https" } else { "http" };
+            let url = format!("{scheme}://{APP_PROTOCOL}.localhost");
+
+            Cow::Owned(Url::parse(&url).expect("Invalid taurino localhost URL"))
+        } else {
+            Cow::Owned(
+                Url::parse(&format!("{APP_PROTOCOL}://localhost"))
+                    .expect("Invalid taurino protocol URL"),
+            )
+        }
+    }
+
+    pub fn register_uri_scheme_protocol<N>(
+        &self,
+        uri_scheme: N,
+        protocol: Arc<ManagerUriSchemeProtocol>,
+    ) where
+        N: Into<String>,
+    {
+        let uri_scheme = uri_scheme.into();
+
+        self.uri_scheme_protocols
+            .lock()
+            .expect("poisoned URI scheme protocol manager")
+            .insert(uri_scheme, protocol);
+    }
+
+    fn prepare_webview(&mut self, mut pending: PendingWebview) -> crate::Result<PendingWebview> {
+        if self.webviews_lock().contains_key(&pending.label) {
+            return Err(crate::Error::WebviewLabelAlreadyExists(pending.label));
+        }
+
+        let label = pending.label.clone();
+        #[allow(unused_mut)] // mut url only for the data-url parsing
+        let mut url = match &pending.webview_attributes.url {
+            WebviewUrl::App(path) => {
+                let app_url = self.get_app_url(pending.webview_attributes.use_https_scheme);
+                let url = if is_local_network_url(&app_url) {
+                    Cow::Owned(Url::parse("taurino://localhost").unwrap())
+                } else {
+                    app_url
+                };
+                // ignore "index.html" just to simplify the url
+                if path.to_str() != Some("index.html") {
+                    url.join(&path.to_string_lossy())
+                        .map_err(crate::Error::InvalidUrl)
+                        // this will never fail
+                        .unwrap()
+                } else {
+                    url.into_owned()
+                }
+            }
+            WebviewUrl::External(url) => {
+                let config_url = self.get_app_url(pending.webview_attributes.use_https_scheme);
+                let is_app_url = config_url.make_relative(url).is_some();
+                let mut url = url.clone();
+                if is_app_url && is_local_network_url(&url) {
+                    Url::parse("taurino://localhost").unwrap()
+                } else {
+                    url
+                }
+            }
+
+            WebviewUrl::CustomProtocol(url) => url.clone(),
+            #[allow(unreachable_patterns)]
+            _ => unimplemented!(),
+        };
+
+        if url.scheme() == "data" {
+            if let Ok(data_url) = data_url::DataUrl::process(url.as_str()) {
+                let (body, _) = data_url.decode_to_vec().unwrap();
+                let html = String::from_utf8_lossy(&body).into_owned();
+                // naive way to check if it's an html
+                if html.contains('<') && html.contains('>') {
+                    url.set_path(&format!("{},{html}", mime::TEXT_HTML));
+                }
+            }
+        }
+
+        pending.url = url.to_string();
+
+        self.prepare_pending_webview(pending, &label)
+    }
+
+    fn prepare_pending_webview(
+        &mut self,
+        mut pending: PendingWebview,
+        label: &str,
+    ) -> crate::Result<PendingWebview> {
+        let use_https_scheme = pending.webview_attributes.use_https_scheme;
+
+        let protocols = self.registered_uri_scheme_protocols();
+        let mut registered_scheme_protocols = HashSet::new();
+
+        for (uri_scheme, protocol) in protocols {
+            registered_scheme_protocols.insert(uri_scheme.clone());
+
+            let window_label = Arc::clone(&self.window_label);
+
+            pending.internal_register_uri_scheme_protocol(
+                uri_scheme,
+                move |webview_id, request, responder| {
+                    let context = ManagerUriSchemeContext::new(window_label.as_ref(), webview_id);
+
+                    protocol.handle(context, request, ManagerUriSchemeResponder(responder));
+                },
+            );
+        }
+
+        let window_url = Url::parse(&pending.url).map_err(crate::Error::InvalidUrl)?;
+
+        let window_origin = Self::window_origin(&window_url, use_https_scheme);
+
+        self.register_builtin_protocols(
+            &mut pending,
+            &mut registered_scheme_protocols,
+            window_origin,
+        );
+
+        let _ = label;
+
+        Ok(pending)
+    }
+
+    fn registered_uri_scheme_protocols(&self) -> Vec<(String, Arc<ManagerUriSchemeProtocol>)> {
+        self.uri_scheme_protocols
+            .lock()
+            .expect("poisoned URI scheme protocol manager")
+            .iter()
+            .map(|(scheme, protocol)| (scheme.clone(), Arc::clone(protocol)))
+            .collect()
+    }
+
+    fn register_builtin_protocols(
+        &mut self,
+        pending: &mut PendingWebview,
+        registered_scheme_protocols: &mut HashSet<String>,
+        _window_origin: String,
+    ) {
+        if !registered_scheme_protocols.contains(APP_PROTOCOL) {
+            let _web_resource_request_handler = pending.web_resource_request_handler.take();
+
+            pending.internal_register_uri_scheme_protocol(
+                APP_PROTOCOL,
+                move |_webview_id, _request, _responder| {
+                    // TODO:
+                    // Hier später dein interner taurino asset-protocol handler.
+                    //
+                    // Beispiel:
+                    // protocol(
+                    //     webview_id,
+                    //     request,
+                    //     ManagerUriSchemeResponder(responder),
+                    // );
+                },
+            );
+
+            registered_scheme_protocols.insert(APP_PROTOCOL.to_string());
+        }
+
+        if !registered_scheme_protocols.contains(IPC_PROTOCOL) {
+            pending.internal_register_uri_scheme_protocol(
+                IPC_PROTOCOL,
+                move |_webview_id, _request, _responder| {
+                    // TODO:
+                    // Hier später dein IPC protocol handler.
+                },
+            );
+
+            registered_scheme_protocols.insert(IPC_PROTOCOL.to_string());
+        }
+    }
+
+    fn window_origin(url: &Url, use_https_scheme: bool) -> String {
+        if url.scheme() == "data" {
+            return "null".into();
+        }
+
+        if (cfg!(windows) || cfg!(target_os = "android"))
+            && url.scheme() != "http"
+            && url.scheme() != "https"
+        {
+            let scheme = if use_https_scheme { "https" } else { "http" };
+            return format!("{scheme}://{}.localhost", url.scheme());
+        }
+
+        if let Some(host) = url.host() {
+            let port = url
+                .port()
+                .map(|port| format!(":{port}"))
+                .unwrap_or_default();
+
+            return format!("{}://{}{}", url.scheme(), host, port);
+        }
+
+        "null".into()
+    }
+    pub fn resize_webviews(&self, window: &Window, size: tao::dpi::PhysicalSize<u32>) {
+        let size = size.to_logical::<f32>(window.scale_factor());
+
+        let webviews = self.webviews_lock();
+
+        for webview in webviews.values() {
+            let bounds = webview
+                .bounds
+                .lock()
+                .expect("poisoned webview bounds")
+                .clone();
+
+            let Some(b) = bounds else {
+                continue;
+            };
+
+            if let Err(e) = webview.set_bounds(wry::Rect {
+                position: LogicalPosition::new(size.width * b.x_rate, size.height * b.y_rate)
+                    .into(),
+                size: LogicalSize::new(size.width * b.width_rate, size.height * b.height_rate)
+                    .into(),
+            }) {
+                eprintln!("failed to autoresize webview: {e}");
+            }
+        }
+    }
+    pub fn create_webview(
+        &mut self,
+        window: &Window,
+        pending: PendingWebview,
+    ) -> crate::Result<()> {
+        let pending = self.prepare_webview(pending)?;
+
+        let webview = build_internal(self.window_label.to_string(), window, pending, self)?;
+
+        self.webviews_lock().insert(webview.label.clone(), webview);
+
+        Ok(())
+    }
+}
+)
+types.rs(
+    use std::{
+    borrow::Cow,
+    collections::{HashMap, HashSet},
+    fmt,
+    ops::Deref,
+    path::PathBuf,
+    rc::Rc,
+    str::FromStr,
+    sync::{Arc, Mutex},
+};
+
+use http::Request;
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use serde_with::skip_serializing_none;
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+use tao::window::WindowId;
+use url::Url;
+use wry::{WebContext as WryWebContext, WebView as WryWebView};
+
+#[cfg(target_os = "android")]
+pub struct CreationContext<'a, 'b> {
+    pub env: &'a mut jni::JNIEnv<'b>,
+    pub activity: &'a jni::objects::JObject<'b>,
+    pub webview: &'a jni::objects::JObject<'b>,
+}
+
+/// Kind of event for the page load handler.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PageLoadEvent {
+    /// Page started to load.
+    Started,
+    /// Page finished loading.
+    Finished,
+}
+
+pub type UriSchemeProtocolHandler = dyn Fn(&str, http::Request<Vec<u8>>, Box<dyn FnOnce(http::Response<Cow<'static, [u8]>>) + Send>)
+    + Send
+    + Sync
+    + 'static;
+
+pub type WebResourceRequestHandler =
+    dyn Fn(http::Request<Vec<u8>>, &mut http::Response<Cow<'static, [u8]>>) + Send + Sync;
+
+pub type NavigationHandler = dyn Fn(&Url) -> bool + Send;
+
+pub type NewWindowHandler = dyn Fn(Url, NewWindowFeatures) -> NewWindowResponse + Send;
+
+pub type OnPageLoadHandler = dyn Fn(Url, PageLoadEvent) + Send;
+
+pub type DocumentTitleChangedHandler = dyn Fn(String) + Send + 'static;
+
+pub type DownloadHandler = dyn Fn(DownloadEvent) -> bool + Send + Sync;
+
+/// Identifier of a window.
+/* #[derive(Debug, Clone, Copy, Hash, Eq, PartialEq, Ord, PartialOrd)]
+pub struct WindowId(u32);
+
+impl From<u32> for WindowId {
+    fn from(value: u32) -> Self {
+        Self(value)
+    }
+}
+ */
+pub type WebviewEventId = u32;
+pub type WebviewEventHandler = Box<dyn Fn(&WebviewEvent) + Send>;
+pub type WebviewEventListeners = Arc<Mutex<HashMap<WebviewEventId, WebviewEventHandler>>>;
+
+#[cfg(any(target_os = "macos", target_os = "ios"))]
+pub type OnWebContentProcessTerminateHandler = dyn Fn() + Send;
+
+#[cfg(target_os = "ios")]
+pub type InputAccessoryViewBuilderFn = dyn Fn(&objc2_ui_kit::UIView) -> Option<objc2::rc::Retained<objc2_ui_kit::UIView>>
+    + Send
+    + Sync
+    + 'static;
+
+/// Download event.
+pub enum DownloadEvent<'a> {
+    /// Download requested.
+    Requested {
+        /// The url being downloaded.
+        url: Url,
+        /// Represents where the file will be downloaded to.
+        /// Can be used to set the download location by assigning a new path to it.
+        /// The assigned path _must_ be absolute.
+        destination: &'a mut PathBuf,
+    },
+    /// Download finished.
+    Finished {
+        /// The URL of the original download request.
+        url: Url,
+        /// Potentially representing the filesystem path the file was downloaded to.
+        path: Option<PathBuf>,
+        /// Indicates if the download succeeded or not.
+        success: bool,
+    },
+}
+
+/// Information about the webview that initiated a new window request.
+#[derive(Debug)]
+pub struct NewWindowOpener {
+    /// The instance of the webview that initiated the new window request.
+    ///
+    /// This must be set as the related view of the new webview. See [`WebviewAttributes::related_view`].
+    #[cfg(any(
+        target_os = "linux",
+        target_os = "dragonfly",
+        target_os = "freebsd",
+        target_os = "netbsd",
+        target_os = "openbsd",
+    ))]
+    pub webview: webkit2gtk::WebView,
+    /// The instance of the webview that initiated the new window request.
+    ///
+    /// The target webview environment **MUST** match the environment of the opener webview. See [`WebviewAttributes::with_environment`].
+    #[cfg(windows)]
+    pub webview: webview2_com::Microsoft::Web::WebView2::Win32::ICoreWebView2,
+    #[cfg(windows)]
+    pub environment: webview2_com::Microsoft::Web::WebView2::Win32::ICoreWebView2Environment,
+    /// The instance of the webview that initiated the new window request.
+    #[cfg(target_os = "macos")]
+    pub webview: objc2::rc::Retained<objc2_web_kit::WKWebView>,
+    /// Configuration of the target webview.
+    ///
+    /// This **MUST** be used when creating the target webview. See [`WebviewAttributes::webview_configuration`].
+    #[cfg(target_os = "macos")]
+    pub target_configuration: objc2::rc::Retained<objc2_web_kit::WKWebViewConfiguration>,
+}
+
+/// Window features of a window requested to open.
+#[derive(Debug)]
+pub struct NewWindowFeatures {
+    pub(crate) size: Option<dpi::LogicalSize<f64>>,
+    pub(crate) position: Option<dpi::LogicalPosition<f64>>,
+    pub(crate) opener: NewWindowOpener,
+}
+
+impl NewWindowFeatures {
+    pub fn new(
+        size: Option<dpi::LogicalSize<f64>>,
+        position: Option<dpi::LogicalPosition<f64>>,
+        opener: NewWindowOpener,
+    ) -> Self {
+        Self {
+            size,
+            position,
+            opener,
+        }
+    }
+
+    /// Specifies the size of the content area
+    /// as defined by the user's operating system where the new window will be generated.
+    pub fn size(&self) -> Option<dpi::LogicalSize<f64>> {
+        self.size
+    }
+
+    /// Specifies the position of the window relative to the work area
+    /// as defined by the user's operating system where the new window will be generated.
+    pub fn position(&self) -> Option<dpi::LogicalPosition<f64>> {
+        self.position
+    }
+
+    /// Returns information about the webview that initiated a new window request.
+    pub fn opener(&self) -> &NewWindowOpener {
+        &self.opener
+    }
+}
+
+/// Response for the new window request handler.
+pub enum NewWindowResponse {
+    /// Allow the window to be opened with the default implementation.
+    Allow,
+    /// Allow the window to be opened, with the given window.
+    ///
+    /// ## Platform-specific:
+    ///
+    /// **Linux**: The webview must be related to the caller webview. See [`WebviewAttributes::related_view`].
+    /// **Windows**: The webview must use the same environment as the caller webview. See [`WebviewAttributes::with_environment`].
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    Create { window_id: WindowId },
+    /// Deny the window from being opened.
+    Deny,
+}
+
+/// The scrollbar style to use in the webview.
+///
+/// ## Platform-specific
+///
+/// - **Windows**: This option must be given the same value for all webviews that target the same data directory.
+#[non_exhaustive]
+#[derive(Debug, Clone, Copy, Default)]
+pub enum ScrollBarStyle {
+    #[default]
+    /// The default scrollbar style for the webview.
+    Default,
+
+    #[cfg(windows)]
+    /// Fluent UI style overlay scrollbars. **Windows Only**
+    ///
+    /// Requires WebView2 Runtime version 125.0.2535.41 or higher, does nothing on older versions,
+    /// see <https://learn.microsoft.com/en-us/microsoft-edge/webview2/release-notes/?tabs=dotnetcsharp#10253541>
+    FluentOverlay,
+}
+
+#[derive(Debug)]
+pub struct WebContext {
+    pub inner: WryWebContext,
+    pub referenced_by_webviews: HashSet<String>,
+    // on Linux the custom protocols are associated with the context
+    // and you cannot register a URI scheme more than once
+    pub registered_custom_protocols: HashSet<String>,
+}
+
+pub type WebContextStore = Arc<Mutex<HashMap<Option<PathBuf>, WebContext>>>;
+/// the kind of the webview
+#[derive(PartialEq, Eq, PartialOrd, Ord, Clone, Copy)]
+pub(crate) enum WebviewKind {
+    // webview is the entire window content
+    WindowContent,
+    // webview is a child of the window, which can contain other webviews too
+    WindowChild,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct WebviewBounds {
+    pub x_rate: f32,
+    pub y_rate: f32,
+    pub width_rate: f32,
+    pub height_rate: f32,
+}
+
+/// Defines the URL or assets to embed in the application.
+#[derive(Debug, PartialEq, Eq, Clone, Deserialize, Serialize)]
+#[cfg_attr(feature = "schema", derive(JsonSchema))]
+#[serde(untagged, deny_unknown_fields)]
+#[non_exhaustive]
+pub enum FrontendDist {
+    /// An external URL that should be used as the default application URL. No assets are embedded in the app in this case.
+    Url(Url),
+    /// Path to a directory containing the frontend dist assets.
+    Directory(PathBuf),
+    /// An array of files to embed in the app.
+    Files(Vec<PathBuf>),
+}
+
+impl std::fmt::Display for FrontendDist {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Url(url) => write!(f, "{url}"),
+            Self::Directory(p) => write!(f, "{}", p.display()),
+            Self::Files(files) => write!(f, "{}", serde_json::to_string(files).unwrap()),
+        }
+    }
+}
+
+/* pub struct WebViewMetaData {
+    pub is_kind: bool,
+    pub window_label: String,
+    pub webview_label: String,
+    pub window_id: WindowId,
+    pub webview_id: WebviewId,
+} */
+
+/// URI scheme protocol context.
+#[derive(Clone, Copy, Debug)]
+pub struct WebViewMetaData<'a> {
+    is_kind: &'a bool,
+
+    window_label: &'a str,
+    webview_label: &'a str,
+
+    window_id: &'a WindowId,
+    webview_id: &'a WebviewId,
+}
+
+impl<'a> WebViewMetaData<'a> {
+    pub fn new(
+        is_kind: &'a bool,
+        window_label: &'a str,
+        webview_label: &'a str,
+        window_id: &'a WindowId,
+        webview_id: &'a WebviewId,
+    ) -> Self {
+        Self {
+            is_kind,
+            window_label,
+            webview_label,
+            window_id,
+            webview_id,
+        }
+    }
+
+    /// Returns whether this webview is a child/kind webview.
+    pub fn is_kind(&self) -> &'a bool {
+        self.is_kind
+    }
+
+    /// Returns the window label that owns the webview.
+    pub fn window_label(&self) -> &'a str {
+        self.window_label
+    }
+
+    /// Returns the webview label that made the request.
+    pub fn webview_label(&self) -> &'a str {
+        self.webview_label
+    }
+
+    /// Returns the window id that owns the webview.
+    pub fn window_id(&self) -> &'a WindowId {
+        self.window_id
+    }
+
+    /// Returns the webview id.
+    pub fn webview_id(&self) -> &'a WebviewId {
+        self.webview_id
+    }
+}
+#[derive(Clone)]
+pub struct WebView {
+    pub label: String,
+    pub id: WebviewId,
+    pub inner: Rc<WryWebView>,
+    pub context_store: WebContextStore,
+    /* pub webview_event_listeners: WebviewEventListeners, */
+    // the key of the WebContext if it's not shared
+    pub context_key: Option<PathBuf>,
+    pub(crate) bounds: Arc<Mutex<Option<WebviewBounds>>>,
+}
+
+impl Deref for WebView {
+    type Target = WryWebView;
+
+    #[inline(always)]
+    fn deref(&self) -> &Self::Target {
+        &self.inner
+    }
+}
+
+impl Drop for WebView {
+    fn drop(&mut self) {
+        if Rc::get_mut(&mut self.inner).is_some() {
+            let mut context_store = self.context_store.lock().unwrap();
+
+            if let Some(web_context) = context_store.get_mut(&self.context_key) {
+                web_context.referenced_by_webviews.remove(&self.label);
+
+                // https://github.com/tauri-apps/tauri/issues/14626
+                // Because WebKit does not close its network process even when no webviews are running,
+                // we need to ensure to re-use the existing process on Linux by keeping the WebContext
+                // alive for the lifetime of the app.
+                // WebKit on macOS handles this itself.
+                #[cfg(not(any(
+                    target_os = "linux",
+                    target_os = "dragonfly",
+                    target_os = "freebsd",
+                    target_os = "netbsd",
+                    target_os = "openbsd"
+                )))]
+                if web_context.referenced_by_webviews.is_empty() {
+                    context_store.remove(&self.context_key);
+                }
+            }
+        }
+    }
+}
+
+pub type WebviewId = u32;
+pub type IpcHandler = dyn Fn(Request<String>) + 'static;
+
+/// An event from a window.
+#[derive(Debug, Clone)]
+pub enum WebviewEvent {
+    /// An event associated with the drag and drop action.
+    DragDrop(DragDropEvent),
+}
+
+/// The drag drop event payload.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "camelCase")]
+#[non_exhaustive]pub enum DragDropEvent {
+    /// A drag operation has entered the webview.
+    Enter {
+        /// List of paths that are being dragged onto the webview.
+        paths: Vec<PathBuf>,
+        /// The position of the mouse cursor.
+        position: dpi::PhysicalPosition<f64>,
+    },
+    /// A drag operation is moving over the webview.
+    Over {
+        /// The position of the mouse cursor.
+        position: dpi::PhysicalPosition<f64>,
+    },
+    /// The file(s) have been dropped onto the webview.
+    Drop {
+        /// List of paths that are being dropped onto the window.
+        paths: Vec<PathBuf>,
+        /// The position of the mouse cursor.
+        position: dpi::PhysicalPosition<f64>,
+    },
+    /// The drag operation has been cancelled or left the window.
+    Leave,
+}
+
+#[allow(deprecated)]
+mod window_effects {
+    use super::*;
+
+    #[derive(Debug, PartialEq, Eq, Clone, Copy, Deserialize, Serialize)]
+    #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+    #[serde(rename_all = "camelCase")]
+    /// Platform-specific window effects
+    pub enum WindowEffect {
+        /// A default material appropriate for the view's effectiveAppearance. **macOS 10.14-**
+        #[deprecated(
+            since = "macOS 10.14",
+            note = "You should instead choose an appropriate semantic material."
+        )]
+        AppearanceBased,
+        /// **macOS 10.14-**
+        #[deprecated(since = "macOS 10.14", note = "Use a semantic material instead.")]
+        Light,
+        /// **macOS 10.14-**
+        #[deprecated(since = "macOS 10.14", note = "Use a semantic material instead.")]
+        Dark,
+        /// **macOS 10.14-**
+        #[deprecated(since = "macOS 10.14", note = "Use a semantic material instead.")]
+        MediumLight,
+        /// **macOS 10.14-**
+        #[deprecated(since = "macOS 10.14", note = "Use a semantic material instead.")]
+        UltraDark,
+        /// **macOS 10.10+**
+        Titlebar,
+        /// **macOS 10.10+**
+        Selection,
+        /// **macOS 10.11+**
+        Menu,
+        /// **macOS 10.11+**
+        Popover,
+        /// **macOS 10.11+**
+        Sidebar,
+        /// **macOS 10.14+**
+        HeaderView,
+        /// **macOS 10.14+**
+        Sheet,
+        /// **macOS 10.14+**
+        WindowBackground,
+        /// **macOS 10.14+**
+        HudWindow,
+        /// **macOS 10.14+**
+        FullScreenUI,
+        /// **macOS 10.14+**
+        Tooltip,
+        /// **macOS 10.14+**
+        ContentBackground,
+        /// **macOS 10.14+**
+        UnderWindowBackground,
+        /// **macOS 10.14+**
+        UnderPageBackground,
+        /// Mica effect that matches the system dark preference **Windows 11 Only**
+        Mica,
+        /// Mica effect with dark mode but only if dark mode is enabled on the system **Windows 11 Only**
+        MicaDark,
+        /// Mica effect with light mode **Windows 11 Only**
+        MicaLight,
+        /// Tabbed effect that matches the system dark preference **Windows 11 Only**
+        Tabbed,
+        /// Tabbed effect with dark mode but only if dark mode is enabled on the system **Windows 11 Only**
+        TabbedDark,
+        /// Tabbed effect with light mode **Windows 11 Only**
+        TabbedLight,
+        /// **Windows 7/10/11(22H1) Only**
+        ///
+        /// ## Notes
+        ///
+        /// This effect has bad performance when resizing/dragging the window on Windows 11 build 22621.
+        Blur,
+        /// **Windows 10/11 Only**
+        ///
+        /// ## Notes
+        ///
+        /// This effect has bad performance when resizing/dragging the window on Windows 10 v1903+ and Windows 11 build 22000.
+        Acrylic,
+    }
+
+    /// Window effect state **macOS only**
+    ///
+    /// <https://developer.apple.com/documentation/appkit/nsvisualeffectview/state>
+    #[derive(Debug, PartialEq, Eq, Clone, Copy, Deserialize, Serialize)]
+    #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+    #[serde(rename_all = "camelCase")]
+    pub enum WindowEffectState {
+        /// Make window effect state follow the window's active state
+        FollowsWindowActiveState,
+        /// Make window effect state always active
+        Active,
+        /// Make window effect state always inactive
+        Inactive,
+    }
+}
+
+pub use window_effects::{WindowEffect, WindowEffectState};
+
+/// How the window title bar should be displayed on macOS.
+#[derive(Debug, Clone, PartialEq, Eq, Copy, Default)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[non_exhaustive]
+pub enum TitleBarStyle {
+    /// A normal title bar.
+    #[default]
+    Visible,
+    /// Makes the title bar transparent, so the window background color is shown instead.
+    ///
+    /// Useful if you don't need to have actual HTML under the title bar. This lets you avoid the caveats of using `TitleBarStyle::Overlay`. Will be more useful when Tauri lets you set a custom window background color.
+    Transparent,
+    /// Shows the title bar as a transparent overlay over the window's content.
+    ///
+    /// Keep in mind:
+    /// - The height of the title bar is different on different OS versions, which can lead to window the controls and title not being where you don't expect.
+    /// - You need to define a custom drag region to make your window draggable, however due to a limitation you can't drag the window when it's not in focus <https://github.com/tauri-apps/tauri/issues/4316>.
+    /// - The color of the window title depends on the system theme.
+    Overlay,
+}
+
+impl Serialize for TitleBarStyle {
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_str(self.to_string().as_ref())
+    }
+}
+
+impl<'de> Deserialize<'de> for TitleBarStyle {
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let s = String::deserialize(deserializer)?;
+        Ok(match s.to_lowercase().as_str() {
+            "transparent" => Self::Transparent,
+            "overlay" => Self::Overlay,
+            _ => Self::Visible,
+        })
+    }
+}
+
+impl std::fmt::Display for TitleBarStyle {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{}",
+            match self {
+                Self::Visible => "Visible",
+                Self::Transparent => "Transparent",
+                Self::Overlay => "Overlay",
+            }
+        )
+    }
+}
+
+/// System theme.
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[non_exhaustive]
+pub enum Theme {
+    /// Light theme.
+    Light,
+    /// Dark theme.
+    Dark,
+}
+
+impl Serialize for Theme {
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_str(self.to_string().as_ref())
+    }
+}
+
+impl<'de> Deserialize<'de> for Theme {
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let s = String::deserialize(deserializer)?;
+        Ok(match s.to_lowercase().as_str() {
+            "dark" => Self::Dark,
+            _ => Self::Light,
+        })
+    }
+}
+
+impl std::fmt::Display for Theme {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{}",
+            match self {
+                Self::Light => "light",
+                Self::Dark => "dark",
+            }
+        )
+    }
+}
+
+/// A tuple struct of RGBA colors. Each value has minimum of 0 and maximum of 255.
+#[derive(Debug, PartialEq, Eq, Serialize, Default, Clone, Copy)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct Color(pub u8, pub u8, pub u8, pub u8);
+
+impl From<Color> for (u8, u8, u8, u8) {
+    fn from(value: Color) -> Self {
+        (value.0, value.1, value.2, value.3)
+    }
+}
+
+impl From<Color> for (u8, u8, u8) {
+    fn from(value: Color) -> Self {
+        (value.0, value.1, value.2)
+    }
+}
+
+impl From<(u8, u8, u8, u8)> for Color {
+    fn from(value: (u8, u8, u8, u8)) -> Self {
+        Color(value.0, value.1, value.2, value.3)
+    }
+}
+
+impl From<(u8, u8, u8)> for Color {
+    fn from(value: (u8, u8, u8)) -> Self {
+        Color(value.0, value.1, value.2, 255)
+    }
+}
+
+impl From<Color> for [u8; 4] {
+    fn from(value: Color) -> Self {
+        [value.0, value.1, value.2, value.3]
+    }
+}
+
+impl From<Color> for [u8; 3] {
+    fn from(value: Color) -> Self {
+        [value.0, value.1, value.2]
+    }
+}
+
+impl From<[u8; 4]> for Color {
+    fn from(value: [u8; 4]) -> Self {
+        Color(value[0], value[1], value[2], value[3])
+    }
+}
+
+impl From<[u8; 3]> for Color {
+    fn from(value: [u8; 3]) -> Self {
+        Color(value[0], value[1], value[2], 255)
+    }
+}
+
+impl FromStr for Color {
+    type Err = String;
+    fn from_str(mut color: &str) -> Result<Self, Self::Err> {
+        color = color.trim().strip_prefix('#').unwrap_or(color);
+        let color = match color.len() {
+            // TODO: use repeat_n once our MSRV is bumped to 1.82
+            3 => color
+                .chars()
+                .flat_map(|c| std::iter::repeat(c).take(2))
+                .chain(std::iter::repeat('f').take(2))
+                .collect(),
+            6 => format!("{color}FF"),
+            8 => color.to_string(),
+            _ => {
+                return Err(
+                    "Invalid hex color length, must be either 3, 6 or 8, for example: #fff, #ffffff, or #ffffffff"
+                        .into(),
+                );
+            }
+        };
+
+        let r = u8::from_str_radix(&color[0..2], 16).map_err(|e| e.to_string())?;
+        let g = u8::from_str_radix(&color[2..4], 16).map_err(|e| e.to_string())?;
+        let b = u8::from_str_radix(&color[4..6], 16).map_err(|e| e.to_string())?;
+        let a = u8::from_str_radix(&color[6..8], 16).map_err(|e| e.to_string())?;
+
+        Ok(Color(r, g, b, a))
+    }
+}
+
+fn default_alpha() -> u8 {
+    255
+}
+
+#[derive(Deserialize)]
+#[cfg_attr(feature = "schema", derive(JsonSchema))]
+#[serde(untagged)]
+enum InnerColor {
+    /// Color hex string, for example: #fff, #ffffff, or #ffffffff.
+    String(String),
+    /// Array of RGB colors. Each value has minimum of 0 and maximum of 255.
+    Rgb((u8, u8, u8)),
+    /// Array of RGBA colors. Each value has minimum of 0 and maximum of 255.
+    Rgba((u8, u8, u8, u8)),
+    /// Object of red, green, blue, alpha color values. Each value has minimum of 0 and maximum of 255.
+    RgbaObject {
+        red: u8,
+        green: u8,
+        blue: u8,
+        #[serde(default = "default_alpha")]
+        alpha: u8,
+    },
+}
+
+impl<'de> Deserialize<'de> for Color {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let color = InnerColor::deserialize(deserializer)?;
+        let color = match color {
+            InnerColor::String(string) => string.parse().map_err(serde::de::Error::custom)?,
+            InnerColor::Rgb(rgb) => Color(rgb.0, rgb.1, rgb.2, 255),
+            InnerColor::Rgba(rgb) => rgb.into(),
+            InnerColor::RgbaObject {
+                red,
+                green,
+                blue,
+                alpha,
+            } => Color(red, green, blue, alpha),
+        };
+
+        Ok(color)
+    }
+}
+
+/* #[cfg(feature = "schema")]
+impl schemars::JsonSchema for Color {
+  fn schema_name() -> String {
+    "Color".to_string()
+  }
+
+  fn json_schema(_gen: &mut schemars::gen::SchemaGenerator) -> schemars::schema::Schema {
+    let mut schema = schemars::schema_for!(InnerColor).schema;
+    schema.metadata = None; // Remove `title: InnerColor` from schema
+
+    // add hex color pattern validation
+    let any_of = schema.subschemas().any_of.as_mut().unwrap();
+    let schemars::schema::Schema::Object(str_schema) = any_of.first_mut().unwrap() else {
+      unreachable!()
+    };
+    str_schema.string().pattern = Some("^#?([A-Fa-f0-9]{3}|[A-Fa-f0-9]{6}|[A-Fa-f0-9]{8})$".into());
+
+    schema.into()
+  }
+}
+ */
+
+/// The window effects configuration object
+#[skip_serializing_none]
+#[derive(Debug, PartialEq, Clone, Deserialize, Serialize, Default)]
+#[cfg_attr(feature = "schema", derive(JsonSchema))]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WindowEffectsConfig {
+    /// List of Window effects to apply to the Window.
+    /// Conflicting effects will apply the first one and ignore the rest.
+    pub effects: Vec<WindowEffect>,
+    /// Window effect state **macOS Only**
+    pub state: Option<WindowEffectState>,
+    /// Window effect corner radius **macOS Only**
+    pub radius: Option<f64>,
+    /// Window effect color. Affects [`WindowEffect::Blur`] and [`WindowEffect::Acrylic`] only
+    /// on Windows 10 v1903+. Doesn't have any effect on Windows 7 or Windows 11.
+    pub color: Option<Color>,
+}
+
+/// Background throttling policy.
+#[derive(Debug, PartialEq, Eq, Clone, Deserialize, Serialize)]
+#[cfg_attr(feature = "schema", derive(JsonSchema))]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub enum BackgroundThrottlingPolicy {
+    /// A policy where background throttling is disabled
+    Disabled,
+    /// A policy where a web view that's not in a window fully suspends tasks. This is usually the default behavior in case no policy is set.
+    Suspend,
+    /// A policy where a web view that's not in a window limits processing, but does not fully suspend tasks.
+    Throttle,
+}
+
+/// An URL to open on a Tauri webview window.
+#[derive(PartialEq, Eq, Debug, Clone, Serialize)]
+#[cfg_attr(feature = "schema", derive(JsonSchema))]
+#[serde(untagged)]
+#[non_exhaustive]
+pub enum WebviewUrl {
+    /// An external URL. Must use either the `http` or `https` schemes.
+    External(Url),
+    /// The path portion of an app URL.
+    /// For instance, to load `tauri://localhost/users/john`,
+    /// you can simply provide `users/john` in this configuration.
+    App(PathBuf),
+    /// A custom protocol url, for example, `doom://index.html`
+    CustomProtocol(Url),
+}
+
+impl<'de> Deserialize<'de> for WebviewUrl {
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        #[serde(untagged)]
+        enum WebviewUrlDeserializer {
+            Url(Url),
+            Path(PathBuf),
+        }
+
+        match WebviewUrlDeserializer::deserialize(deserializer)? {
+            WebviewUrlDeserializer::Url(u) => {
+                if u.scheme() == "https" || u.scheme() == "http" {
+                    Ok(Self::External(u))
+                } else {
+                    Ok(Self::CustomProtocol(u))
+                }
+            }
+            WebviewUrlDeserializer::Path(p) => Ok(Self::App(p)),
+        }
+    }
+}
+
+impl fmt::Display for WebviewUrl {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::External(url) | Self::CustomProtocol(url) => write!(f, "{url}"),
+            Self::App(path) => write!(f, "{}", path.display()),
+        }
+    }
+}
+
+impl Default for WebviewUrl {
+    fn default() -> Self {
+        Self::App("index.html".into())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(tag = "target", content = "event", rename_all = "camelCase")]
+pub enum SynthesizedEvent {
+    Window(SynthesizedWindowEvent),
+    WebView(SynthesizedWebViewEvent),
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(tag = "type", content = "payload", rename_all = "camelCase")]
+pub enum SynthesizedWindowEvent {
+    FocusChanged(bool),
+    DragDrop(DragDropEvent),
+    FullscreenChanged(bool),
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(tag = "type", content = "payload", rename_all = "camelCase")]
+pub enum SynthesizedWebViewEvent {
+    DragDrop(DragDropEvent),
+}
+
+impl SynthesizedEvent {
+    pub fn window_focus_changed(focused: bool) -> Self {
+        Self::Window(SynthesizedWindowEvent::FocusChanged(focused))
+    }
+
+    pub fn window_drag_drop(event: DragDropEvent) -> Self {
+        Self::Window(SynthesizedWindowEvent::DragDrop(event))
+    }
+
+    pub fn webview_drag_drop(event: DragDropEvent) -> Self {
+        Self::WebView(SynthesizedWebViewEvent::DragDrop(event))
+    }
+
+    pub fn window_fullscreen_changed(fullscreen: bool) -> Self {
+        Self::Window(SynthesizedWindowEvent::FullscreenChanged(fullscreen))
+    }
+
+    pub fn is_window_event(&self) -> bool {
+        matches!(self, Self::Window(_))
+    }
+
+    pub fn is_webview_event(&self) -> bool {
+        matches!(self, Self::WebView(_))
+    }
+}
+
+pub type ProxyHandler = Arc<dyn Fn(WindowId, WebviewId, SynthesizedEvent) + Send + Sync + 'static>;
+
+)
+utils.rs(
+    use url::Url;
+use wry::{ProxyConfig, ProxyEndpoint};
+
+pub(crate) fn parse_proxy_url(url: &Url) -> crate::Result<ProxyConfig> {
+    let host = url.host().map(|h| h.to_string()).unwrap_or_default();
+    let port = url.port().map(|p| p.to_string()).unwrap_or_default();
+
+    if url.scheme() == "http" {
+        let config = ProxyConfig::Http(ProxyEndpoint { host, port });
+
+        Ok(config)
+    } else if url.scheme() == "socks5" {
+        let config = ProxyConfig::Socks5(ProxyEndpoint { host, port });
+
+        Ok(config)
+    } else {
+        Err(crate::Error::InvalidProxyUrl)
+    }
+}
+
+pub(crate) fn is_local_network_url(url: &url::Url) -> bool {
+    match url.host() {
+        Some(url::Host::Domain(s)) => s == "localhost",
+        Some(url::Host::Ipv4(_)) | Some(url::Host::Ipv6(_)) => true,
+        None => false,
+    }
+}
+
+)
+wrapper.rs(use std::{
+    borrow::Cow,
+    path::{Component, Path},
+};
+
+use dpi::{Position, Size};
+use serde::Serialize;
+
+/// A rectangular region.
+#[derive(Clone, Copy, Debug, Serialize)]
+pub struct Rect {
+    /// Rect position.
+    pub position: dpi::Position,
+    /// Rect size.
+    pub size: dpi::Size,
+}
+
+impl Default for Rect {
+    fn default() -> Self {
+        Self {
+            position: Position::Logical((0, 0).into()),
+            size: Size::Logical((0, 0).into()),
+        }
+    }
+}
+
+/// A rectangular region in physical pixels.
+#[derive(Clone, Copy, Debug, Serialize)]
+pub struct PhysicalRect<P: dpi::Pixel, S: dpi::Pixel> {
+    /// Rect position.
+    pub position: dpi::PhysicalPosition<P>,
+    /// Rect size.
+    pub size: dpi::PhysicalSize<S>,
+}
+
+impl<P: dpi::Pixel, S: dpi::Pixel> Default for PhysicalRect<P, S> {
+    fn default() -> Self {
+        Self {
+            position: (0, 0).into(),
+            size: (0, 0).into(),
+        }
+    }
+}
+
+/// A rectangular region in logical pixels.
+#[derive(Clone, Copy, Debug, Serialize)]
+pub struct LogicalRect<P: dpi::Pixel, S: dpi::Pixel> {
+    /// Rect position.
+    pub position: dpi::LogicalPosition<P>,
+    /// Rect size.
+    pub size: dpi::LogicalSize<S>,
+}
+
+impl<P: dpi::Pixel, S: dpi::Pixel> Default for LogicalRect<P, S> {
+    fn default() -> Self {
+        Self {
+            position: (0, 0).into(),
+            size: (0, 0).into(),
+        }
+    }
+}
+
+pub struct RectWrapper(pub wry::Rect);
+impl From<Rect> for RectWrapper {
+    fn from(value: Rect) -> Self {
+        RectWrapper(wry::Rect {
+            position: value.position,
+            size: value.size,
+        })
+    }
+}
+
+/// Assets iterator.
+pub type AssetsIter<'a> = dyn Iterator<Item = (Cow<'a, str>, Cow<'a, [u8]>)> + 'a;
+
+/// Represent an asset file path in a normalized way.
+///
+/// The following rules are enforced and added if needed:
+/// * Unix path component separators
+/// * Has a root directory
+/// * No trailing slash - directories are not included in assets
+#[derive(Debug, Clone, Eq, PartialEq, Ord, PartialOrd, Hash)]
+pub struct AssetKey(String);
+
+impl From<AssetKey> for String {
+    fn from(key: AssetKey) -> Self {
+        key.0
+    }
+}
+
+impl AsRef<str> for AssetKey {
+    fn as_ref(&self) -> &str {
+        &self.0
+    }
+}
+
+impl<P: AsRef<Path>> From<P> for AssetKey {
+    fn from(path: P) -> Self {
+        // TODO: change this to utilize `Cow` to prevent allocating an intermediate `PathBuf` when not necessary
+        let path = path.as_ref().to_owned();
+
+        // add in root to mimic how it is used from a server url
+        let path = if path.has_root() {
+            path
+        } else {
+            Path::new(&Component::RootDir).join(path)
+        };
+
+        let buf = if cfg!(windows) {
+            let mut buf = String::new();
+            for component in path.components() {
+                match component {
+                    Component::RootDir => buf.push('/'),
+                    Component::CurDir => buf.push_str("./"),
+                    Component::ParentDir => buf.push_str("../"),
+                    Component::Prefix(prefix) => {
+                        buf.push_str(&prefix.as_os_str().to_string_lossy())
+                    }
+                    Component::Normal(s) => {
+                        buf.push_str(&s.to_string_lossy());
+                        buf.push('/')
+                    }
+                }
+            }
+
+            // remove the last slash
+            if buf != "/" {
+                buf.pop();
+            }
+
+            buf
+        } else {
+            path.to_string_lossy().to_string()
+        };
+
+        AssetKey(buf)
+    }
+}
+)
