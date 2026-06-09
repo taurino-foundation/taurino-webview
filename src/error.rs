@@ -9,7 +9,9 @@ use http::{
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 pub enum Error {
-    #[error("invalid extension `{extension}` used for image {path}, must be `ico` or `png`")]
+    #[error(
+        "invalid extension `{extension}` used for image {path}, must be `ico` or `png`"
+    )]
     InvalidImageExtension { extension: PathBuf, path: PathBuf },
     /// Failed to create webview.
     #[error("failed to create webview: {0}")]

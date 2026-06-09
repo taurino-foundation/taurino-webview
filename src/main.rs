@@ -12,32 +12,39 @@ pub mod types;
 pub mod utils;
 pub mod webview;
 pub mod wrapper;
-use std::path::PathBuf;
 
-use dpi::{LogicalPosition, LogicalSize};
+pub(crate) mod protocol;
+
 use tao::{
     event::{Event, WindowEvent},
     event_loop::{ControlFlow, EventLoop},
     window::WindowBuilder,
 };
-/* use url::Url; */
-pub(crate) mod protocol;
-use crate::{
-    attributes::WebviewAttributes, builder::WebViewBuilder, error::Error, manager::Manager, pending::PendingWebview, wrapper::Rect
-};
+
+use crate::{builder::WebViewBuilder, error::Error, manager::Manager};
 
 /// Result type.
 pub type Result<T> = std::result::Result<T, Error>;
 
-fn simple() -> Result<()> {
+fn main() -> Result<()> {
+    // Beispiel 1: lokale HTML-Dateien aus dem dist-Ordner.
+    local_html_example()
+
+    // Beispiel 2: externe Webseiten.
+    // Zum Testen einfach oben auskommentieren und diese Zeile aktivieren:
+    //
+    // external_url_example()
+}
+
+fn local_html_example() -> Result<()> {
     let event_loop = EventLoop::new();
 
     let window = WindowBuilder::new()
-        .with_title("Taurino Example")
+        .with_title("Taurino Local HTML Example")
         .build(&event_loop)
         .expect("failed to create tao window");
 
-let mut manager = Manager::new()?
+    let mut manager = Manager::new()?
         .set_window_id(window.id())
         .set_static_dir("dist");
 
@@ -57,18 +64,16 @@ let mut manager = Manager::new()?
     let layouts = [
         // oben links
         (0.0, 0.0, half_width, half_height),
-
         // oben rechts
         (half_width, 0.0, half_width, half_height),
-
         // unten links
         (0.0, half_height, half_width, half_height),
-
         // unten rechts
         (half_width, half_height, half_width, half_height),
     ];
 
-    for ((label, page), (x, y, width, height)) in pages.into_iter().zip(layouts) {
+    for ((label, page), (x, y, width, height)) in pages.into_iter().zip(layouts)
+    {
         let pending = WebViewBuilder::app(label, page)
             .auto_resize()
             .bounds(x, y, width, height)
@@ -76,6 +81,7 @@ let mut manager = Manager::new()?
 
         manager.create_webview(&window, pending)?;
     }
+
     event_loop.run(move |event, _, control_flow| {
         *control_flow = ControlFlow::Wait;
 
@@ -100,15 +106,14 @@ let mut manager = Manager::new()?
 }
 
 /*
-fn main() -> Result<()> {
+fn external_url_example() -> Result<()> {
     let event_loop = EventLoop::new();
 
     let window = WindowBuilder::new()
-        .with_title("Taurino Example")
+        .with_title("Taurino External URL Example")
         .build(&event_loop)
         .expect("failed to create tao window");
 
-    /* let event_loop = HandleManager::new(); */
     let mut manager = Manager::new()?
         .set_window_id(window.id())
         .set_static_dir("dist");
@@ -129,27 +134,22 @@ fn main() -> Result<()> {
     let layouts = [
         // oben links
         (0.0, 0.0, half_width, half_height),
+
         // oben rechts
         (half_width, 0.0, half_width, half_height),
+
         // unten links
         (0.0, half_height, half_width, half_height),
+
         // unten rechts
         (half_width, half_height, half_width, half_height),
     ];
 
     for ((label, url), (x, y, width, height)) in urls.into_iter().zip(layouts) {
-        let app_url = Url::parse(url).unwrap();
-
-        let mut attrs = WebviewAttributes::new(types::WebviewUrl::External(app_url))
-            .scroll_bar_style(types::ScrollBarStyle::FluentOverlay)
-            .auto_resize();
-
-        attrs.bounds = Some(Rect {
-            position: LogicalPosition::new(x, y).into(),
-            size: LogicalSize::new(width, height).into(),
-        });
-
-        let pending = PendingWebview::new(label, true, attrs);
+        let pending = WebViewBuilder::external(label, url)?
+            .auto_resize()
+            .bounds(x, y, width, height)
+            .build();
 
         manager.create_webview(&window, pending)?;
     }
@@ -176,4 +176,4 @@ fn main() -> Result<()> {
         }
     })
 }
- */
+*/

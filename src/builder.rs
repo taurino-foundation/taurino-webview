@@ -57,13 +57,7 @@ impl WebViewBuilder {
         self
     }
 
-    pub fn bounds(
-        mut self,
-        x: f32,
-        y: f32,
-        width: f32,
-        height: f32,
-    ) -> Self {
+    pub fn bounds(mut self, x: f32, y: f32, width: f32, height: f32) -> Self {
         self.attrs.bounds = Some(Rect {
             position: LogicalPosition::new(x, y).into(),
             size: LogicalSize::new(width, height).into(),
@@ -98,10 +92,6 @@ impl WebViewBuilder {
     }
 
     pub fn build(self) -> PendingWebview {
-        PendingWebview::new(
-            self.label,
-            self.kind,
-            self.attrs,
-        )
+        PendingWebview::new(self.label, self.kind, self.attrs)
     }
 }

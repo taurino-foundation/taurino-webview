@@ -54,7 +54,9 @@ impl std::fmt::Display for FrontendDist {
         match self {
             Self::Url(url) => write!(f, "{url}"),
             Self::Directory(p) => write!(f, "{}", p.display()),
-            Self::Files(files) => write!(f, "{}", serde_json::to_string(files).unwrap()),
+            Self::Files(files) => {
+                write!(f, "{}", serde_json::to_string(files).unwrap())
+            }
         }
     }
 }
@@ -75,16 +77,28 @@ mod window_effects {
         )]
         AppearanceBased,
         /// **macOS 10.14-**
-        #[deprecated(since = "macOS 10.14", note = "Use a semantic material instead.")]
+        #[deprecated(
+            since = "macOS 10.14",
+            note = "Use a semantic material instead."
+        )]
         Light,
         /// **macOS 10.14-**
-        #[deprecated(since = "macOS 10.14", note = "Use a semantic material instead.")]
+        #[deprecated(
+            since = "macOS 10.14",
+            note = "Use a semantic material instead."
+        )]
         Dark,
         /// **macOS 10.14-**
-        #[deprecated(since = "macOS 10.14", note = "Use a semantic material instead.")]
+        #[deprecated(
+            since = "macOS 10.14",
+            note = "Use a semantic material instead."
+        )]
         MediumLight,
         /// **macOS 10.14-**
-        #[deprecated(since = "macOS 10.14", note = "Use a semantic material instead.")]
+        #[deprecated(
+            since = "macOS 10.14",
+            note = "Use a semantic material instead."
+        )]
         UltraDark,
         /// **macOS 10.10+**
         Titlebar,
@@ -180,7 +194,10 @@ pub enum TitleBarStyle {
 }
 
 impl Serialize for TitleBarStyle {
-    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    fn serialize<S>(
+        &self,
+        serializer: S,
+    ) -> std::result::Result<S::Ok, S::Error>
     where
         S: Serializer,
     {
@@ -228,7 +245,10 @@ pub enum Theme {
 }
 
 impl Serialize for Theme {
-    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    fn serialize<S>(
+        &self,
+        serializer: S,
+    ) -> std::result::Result<S::Ok, S::Error>
     where
         S: Serializer,
     {
@@ -336,10 +356,14 @@ impl FromStr for Color {
             }
         };
 
-        let r = u8::from_str_radix(&color[0..2], 16).map_err(|e| e.to_string())?;
-        let g = u8::from_str_radix(&color[2..4], 16).map_err(|e| e.to_string())?;
-        let b = u8::from_str_radix(&color[4..6], 16).map_err(|e| e.to_string())?;
-        let a = u8::from_str_radix(&color[6..8], 16).map_err(|e| e.to_string())?;
+        let r =
+            u8::from_str_radix(&color[0..2], 16).map_err(|e| e.to_string())?;
+        let g =
+            u8::from_str_radix(&color[2..4], 16).map_err(|e| e.to_string())?;
+        let b =
+            u8::from_str_radix(&color[4..6], 16).map_err(|e| e.to_string())?;
+        let a =
+            u8::from_str_radix(&color[6..8], 16).map_err(|e| e.to_string())?;
 
         Ok(Color(r, g, b, a))
     }
@@ -376,7 +400,9 @@ impl<'de> Deserialize<'de> for Color {
     {
         let color = InnerColor::deserialize(deserializer)?;
         let color = match color {
-            InnerColor::String(string) => string.parse().map_err(serde::de::Error::custom)?,
+            InnerColor::String(string) => {
+                string.parse().map_err(serde::de::Error::custom)?
+            }
             InnerColor::Rgb(rgb) => Color(rgb.0, rgb.1, rgb.2, 255),
             InnerColor::Rgba(rgb) => rgb.into(),
             InnerColor::RgbaObject {
@@ -488,7 +514,9 @@ impl<'de> Deserialize<'de> for WebviewUrl {
 impl fmt::Display for WebviewUrl {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::External(url) | Self::CustomProtocol(url) => write!(f, "{url}"),
+            Self::External(url) | Self::CustomProtocol(url) => {
+                write!(f, "{url}")
+            }
             Self::App(path) => write!(f, "{}", path.display()),
         }
     }
