@@ -9,10 +9,12 @@ use std::{
 };
 
 use dpi::{LogicalPosition, LogicalSize};
+use serialize_to_javascript::{DefaultTemplate, Template, default_template};
 use tao::window::{Window, WindowId};
 use url::Url;
 
 use crate::{
+    attributes::InitializationScript,
     factory::create_wry_webview,
     pending::PendingWebview,
     protocol,
@@ -27,35 +29,207 @@ use crate::{
 const APP_PROTOCOL: &str = "taurino";
 const IPC_PROTOCOL: &str = "ipc";
 
+#[allow(dead_code)]
+pub(crate) const PROCESS_IPC_MESSAGE_FN: &str =
+    include_str!("../scripts/process-ipc-message-fn.js");
+
+#[allow(dead_code)]
+#[derive(Template)]
+#[default_template("../scripts/isolation.js")]
+pub(crate) struct IsolationJavascript<'a> {
+    pub(crate) isolation_src: &'a str,
+    pub(crate) style: &'a str,
+}
+
+#[allow(dead_code)]
+#[derive(Template)]
+#[default_template("../scripts/ipc.js")]
+pub(crate) struct IpcJavascript<'a> {
+    pub(crate) isolation_origin: &'a str,
+}
+
+pub struct ManagerConfig {
+    freeze_prototype: bool,
+    pattern: bool,
+
+    pub webview_runtime_installed: bool,
+    /// The script that initializes the invoke system.
+    pub invoke_initialization_script: String,
+
+    /// A runtime generated invoke key.
+    pub(crate) invoke_key: String,
+    /// Custom protocols to register on the webview.
+    frontend_dist: Option<FrontendDist>,
+    pub web_context: WebContextStore,
+}
+impl ManagerConfig {
+    pub fn new() -> crate::Result<Self> {
+        Ok(Self::default())
+    }
+
+    // ---------------------------------------------------------------------
+    // Getter
+    // ---------------------------------------------------------------------
+
+    pub fn freeze_prototype(&self) -> bool {
+        self.freeze_prototype
+    }
+
+    pub fn pattern(&self) -> bool {
+        self.pattern
+    }
+
+    pub fn webview_runtime_installed(&self) -> bool {
+        self.webview_runtime_installed
+    }
+
+    pub fn invoke_initialization_script(&self) -> &str {
+        &self.invoke_initialization_script
+    }
+    #[allow(dead_code)]
+    pub(crate) fn invoke_key(&self) -> &str {
+        &self.invoke_key
+    }
+
+    pub fn frontend_dist(&self) -> Option<&FrontendDist> {
+        self.frontend_dist.as_ref()
+    }
+
+    pub(crate) fn resource_path(&self) -> Option<&FrontendDist> {
+        self.frontend_dist.as_ref()
+    }
+
+    pub(crate) fn web_context(&self) -> &WebContextStore {
+        &self.web_context
+    }
+
+    // ---------------------------------------------------------------------
+    // Builder-Setter
+    // ---------------------------------------------------------------------
+
+    #[allow(dead_code)]
+    pub fn set_freeze_prototype(mut self, value: bool) -> Self {
+        self.freeze_prototype = value;
+        self
+    }
+
+    #[allow(dead_code)]
+    pub fn set_pattern(mut self, value: bool) -> Self {
+        self.pattern = value;
+        self
+    }
+
+    #[allow(dead_code)]
+    pub fn set_webview_runtime_installed(mut self, value: bool) -> Self {
+        self.webview_runtime_installed = value;
+        self
+    }
+
+    #[allow(dead_code)]
+    pub fn set_invoke_initialization_script<S>(mut self, script: S) -> Self
+    where
+        S: Into<String>,
+    {
+        self.invoke_initialization_script = script.into();
+        self
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn set_invoke_key<S>(mut self, key: S) -> Self
+    where
+        S: Into<String>,
+    {
+        self.invoke_key = key.into();
+        self
+    }
+
+    #[allow(dead_code)]
+    pub fn set_web_context(mut self, web_context: WebContextStore) -> Self {
+        self.web_context = web_context;
+        self
+    }
+
+    #[allow(dead_code)]
+    pub fn set_frontend_dist(mut self, frontend_dist: FrontendDist) -> Self {
+        self.frontend_dist = Some(frontend_dist);
+        self
+    }
+
+    #[allow(dead_code)]
+    pub fn clear_frontend_dist(mut self) -> Self {
+        self.frontend_dist = None;
+        self
+    }
+
+    // ---------------------------------------------------------------------
+    // Convenience-Setter für FrontendDist
+    // ---------------------------------------------------------------------
+
+    pub fn with_dev_server_url(mut self, url: &str) -> crate::Result<Self> {
+        let url = Url::parse(url).map_err(crate::Error::InvalidUrl)?;
+        self.frontend_dist = Some(FrontendDist::Url(url));
+        Ok(self)
+    }
+
+    #[allow(dead_code)]
+    pub fn set_static_dir<P>(mut self, path: P) -> Self
+    where
+        P: Into<PathBuf>,
+    {
+        self.frontend_dist = Some(FrontendDist::Directory(path.into()));
+        self
+    }
+
+    #[allow(dead_code)]
+    pub fn set_static_files(mut self, files: Vec<PathBuf>) -> Self {
+        self.frontend_dist = Some(FrontendDist::Files(files));
+        self
+    }
+}
+
+impl Default for ManagerConfig {
+    fn default() -> Self {
+        Self {
+            freeze_prototype: false,
+            pattern: false,
+            webview_runtime_installed: wry::webview_version().is_ok(),
+            invoke_initialization_script: Default::default(),
+            invoke_key: Default::default(),
+            frontend_dist: None,
+            web_context: Default::default(),
+        }
+    }
+}
 pub struct Manager {
-    window_label: Arc<str>,
+    pub(crate) config: ManagerConfig,
+    pub(crate) window_label: Arc<str>,
     pub window_id: Arc<Mutex<Option<WindowId>>>,
 
     pub webviews: Arc<Mutex<HashMap<String, WebView>>>,
 
-    uri_scheme_protocols: Mutex<HashMap<String, Arc<ManagerUriSchemeProtocol>>>,
-    /// Custom protocols to register on the webview
-    frontend_dist: Option<FrontendDist>,
-    web_context: WebContextStore,
+    pub(crate) uri_scheme_protocols:
+        Mutex<HashMap<String, Arc<ManagerUriSchemeProtocol>>>,
 
     next_webview_id: Arc<AtomicU32>,
     next_webview_event_id: Arc<AtomicU32>,
-
-    pub webview_runtime_installed: bool,
 }
+
 impl Manager {
     pub fn new() -> crate::Result<Self> {
         Ok(Self {
-            window_label: Arc::from("root"),
+            config: ManagerConfig::default(),
+            window_label: Arc::from("main"),
             window_id: Arc::new(Mutex::new(None)),
             webviews: Arc::new(Mutex::new(HashMap::new())),
             uri_scheme_protocols: Mutex::new(HashMap::new()),
-            frontend_dist: None,
-            web_context: Default::default(),
             next_webview_id: Arc::new(AtomicU32::new(0)),
             next_webview_event_id: Arc::new(AtomicU32::new(0)),
-            webview_runtime_installed: wry::webview_version().is_ok(),
         })
+    }
+
+    pub fn set_manager_config(mut self, config: ManagerConfig) -> Self {
+        self.config = config.into();
+        self
     }
 
     pub fn set_window_label<S>(mut self, window_label: S) -> Self
@@ -73,40 +247,12 @@ impl Manager {
         self
     }
 
-    pub fn with_dev_server_url(mut self, url: &str) -> crate::Result<Self> {
-        let url = Url::parse(url).map_err(crate::Error::InvalidUrl)?;
-        self.frontend_dist = Some(FrontendDist::Url(url));
-        Ok(self)
-    }
-
-    pub fn set_static_dir<P: Into<PathBuf>>(mut self, path: P) -> Self {
-        self.frontend_dist = Some(FrontendDist::Directory(path.into()));
-        self
-    }
-    pub fn set_frontend_dist(mut self, path: FrontendDist) -> Self {
-        self.frontend_dist = Some(path);
-        self
-    }
-
-    pub fn set_static_files(mut self, files: Vec<PathBuf>) -> Self {
-        self.frontend_dist = Some(FrontendDist::Files(files));
-        self
-    }
-
     pub(crate) fn next_webview_id(&self) -> WebviewId {
         self.next_webview_id.fetch_add(1, Ordering::Relaxed)
     }
 
     pub(crate) fn next_webview_event_id(&self) -> u32 {
         self.next_webview_event_id.fetch_add(1, Ordering::Relaxed)
-    }
-    #[allow(dead_code)]
-    fn webview_runtime_installed(&self) -> bool {
-        self.webview_runtime_installed
-    }
-
-    pub(crate) fn web_context(&self) -> &WebContextStore {
-        &self.web_context
     }
 
     /// Get a locked handle to the webviews.
@@ -127,12 +273,11 @@ impl Manager {
     /// - If `frontend_dist` is an URL, this URL is returned.
     /// - Otherwise the custom app protocol URL is returned.
     pub(crate) fn get_app_url(&self, https: bool) -> Cow<'_, Url> {
-        match self.frontend_dist.as_ref() {
+        match self.config.resource_path() {
             Some(FrontendDist::Url(url)) => Cow::Borrowed(url),
             _ => self.taurino_protocol_url(https),
         }
     }
-
     /// The custom protocol URL used to serve embedded assets.
     ///
     /// Returns:
@@ -145,11 +290,11 @@ impl Manager {
             let scheme = if https { "https" } else { "http" };
             let url = format!("{scheme}://{APP_PROTOCOL}.localhost");
 
-            Cow::Owned(Url::parse(&url).expect("Invalid taurino localhost URL"))
+            Cow::Owned(Url::parse(&url).expect("invalid taurino localhost URL"))
         } else {
             Cow::Owned(
                 Url::parse(&format!("{APP_PROTOCOL}://localhost"))
-                    .expect("Invalid taurino protocol URL"),
+                    .expect("invalid taurino protocol URL"),
             )
         }
     }
@@ -178,22 +323,25 @@ impl Manager {
         }
 
         let label = pending.label.clone();
-        #[allow(unused_mut)] // mut url only for the data-url parsing
+
         let mut url = match &pending.webview_attributes.url {
             WebviewUrl::App(path) => {
                 let app_url = self
                     .get_app_url(pending.webview_attributes.use_https_scheme);
+
                 let url = if is_local_network_url(&app_url) {
-                    Cow::Owned(Url::parse("taurino://localhost").unwrap())
+                    Cow::Owned(
+                        Url::parse("taurino://localhost")
+                            .expect("invalid app URL"),
+                    )
                 } else {
                     app_url
                 };
-                // ignore "index.html" just to simplify the url
+
+                // Ignore `index.html` just to simplify the URL.
                 if path.to_str() != Some("index.html") {
                     url.join(&path.to_string_lossy())
-                        .map_err(crate::Error::InvalidUrl)
-                        // this will never fail
-                        .unwrap()
+                        .map_err(crate::Error::InvalidUrl)?
                 } else {
                     url.into_owned()
                 }
@@ -201,15 +349,15 @@ impl Manager {
             WebviewUrl::External(url) => {
                 let config_url = self
                     .get_app_url(pending.webview_attributes.use_https_scheme);
-                let is_app_url = config_url.make_relative(&url).is_some();
-                let mut url = url.clone();
+                let is_app_url = config_url.make_relative(url).is_some();
+                let url = url.clone();
+
                 if is_app_url && is_local_network_url(&url) {
-                    Url::parse("taurino://localhost").unwrap()
+                    Url::parse("taurino://localhost").expect("invalid app URL")
                 } else {
                     url
                 }
             }
-
             WebviewUrl::CustomProtocol(url) => url.clone(),
             #[allow(unreachable_patterns)]
             _ => unimplemented!(),
@@ -217,11 +365,13 @@ impl Manager {
 
         if url.scheme() == "data" {
             if let Ok(data_url) = data_url::DataUrl::process(url.as_str()) {
-                let (body, _) = data_url.decode_to_vec().unwrap();
-                let html = String::from_utf8_lossy(&body).into_owned();
-                // naive way to check if it's an html
-                if html.contains('<') && html.contains('>') {
-                    url.set_path(&format!("{},{html}", mime::TEXT_HTML));
+                if let Ok((body, _)) = data_url.decode_to_vec() {
+                    let html = String::from_utf8_lossy(&body).into_owned();
+
+                    // Naive way to check if it is HTML.
+                    if html.contains('<') && html.contains('>') {
+                        url.set_path(&format!(",{html}"));
+                    }
                 }
             }
         }
@@ -237,6 +387,63 @@ impl Manager {
         label: &str,
     ) -> crate::Result<PendingWebview> {
         let use_https_scheme = pending.webview_attributes.use_https_scheme;
+
+        let mut all_initialization_scripts: Vec<InitializationScript> =
+            Vec::new();
+
+        fn main_frame_script(script: String) -> InitializationScript {
+            InitializationScript {
+                script,
+                for_main_frame_only: true,
+            }
+        }
+
+        all_initialization_scripts.push(main_frame_script(
+            r#"
+            Object.defineProperty(window, 'isTaurino', {
+                value: true,
+            });
+
+            if (!window.__TAURINO_INTERNALS__) {
+                Object.defineProperty(window, '__TAURINO_INTERNALS__', {
+                    value: {
+                        plugins: {}
+                    }
+                });
+            }
+            "#
+            .to_owned(),
+        ));
+
+        all_initialization_scripts.push(main_frame_script(format!(
+            r#"
+            Object.defineProperty(window.__TAURINO_INTERNALS__, 'metadata', {{
+                value: {{
+                    currentWindow: {{ label: {current_window_label} }},
+                    currentWebview: {{ label: {current_webview_label} }}
+                }}
+            }});
+            "#,
+            current_window_label =
+                serde_json::to_string(self.window_label.as_ref())?,
+            current_webview_label = serde_json::to_string(label)?,
+        )));
+
+        let ipc_script = "";
+        let pattern_script = "";
+
+        all_initialization_scripts.push(main_frame_script(
+            self.initialization_script(
+                ipc_script,
+                pattern_script,
+                use_https_scheme,
+            )?,
+        ));
+
+        pending
+            .webview_attributes
+            .initialization_scripts
+            .extend(all_initialization_scripts);
 
         let protocols = self.registered_uri_scheme_protocols();
         let mut registered_scheme_protocols = HashSet::new();
@@ -265,7 +472,6 @@ impl Manager {
 
         let window_url =
             Url::parse(&pending.url).map_err(crate::Error::InvalidUrl)?;
-
         let window_origin = Self::window_origin(&window_url, use_https_scheme);
 
         self.register_builtin_protocols(
@@ -273,8 +479,6 @@ impl Manager {
             &mut registered_scheme_protocols,
             window_origin,
         );
-
-        let _ = label;
 
         Ok(pending)
     }
@@ -300,9 +504,10 @@ impl Manager {
             let _web_resource_request_handler =
                 pending.web_resource_request_handler.take();
 
-            let app_protocol =
-                protocol::get(self.frontend_dist.clone(), &window_origin);
-
+            let app_protocol = protocol::get(
+                self.config.resource_path().cloned(),
+                &window_origin,
+            );
             let window_label = Arc::clone(&self.window_label);
 
             pending.internal_register_uri_scheme_protocol(
@@ -328,8 +533,7 @@ impl Manager {
             pending.internal_register_uri_scheme_protocol(
                 IPC_PROTOCOL,
                 move |_webview_id, _request, _responder| {
-                    // TODO:
-                    // Hier später dein IPC protocol handler.
+                    // TODO: Add your IPC protocol handler here.
                 },
             );
 
@@ -361,13 +565,97 @@ impl Manager {
 
         "null".into()
     }
+
+    fn event_initialization_script(
+        function_name: &str,
+        listeners: &str,
+    ) -> String {
+        format!(
+            r#"
+            Object.defineProperty(window, '{function_name}', {{
+                value: function (eventData, ids) {{
+                    const listeners = (window['{listeners}'] && window['{listeners}'][eventData.event]) || [];
+
+                    for (const id of ids) {{
+                        const listener = listeners[id];
+
+                        if (listener) {{
+                            eventData.id = id;
+
+                            if (
+                                window.__TAURINO_INTERNALS__ &&
+                                typeof window.__TAURINO_INTERNALS__.runCallback === 'function'
+                            ) {{
+                                window.__TAURINO_INTERNALS__.runCallback(listener.handlerId, eventData);
+                            }}
+                        }}
+                    }}
+                }}
+            }});
+            "#
+        )
+    }
+
+    fn initialization_script(
+        &self,
+        ipc_script: &str,
+        pattern_script: &str,
+        use_https_scheme: bool,
+    ) -> crate::Result<String> {
+        #[derive(Template)]
+        #[default_template("../scripts/init.js")]
+        struct InitJavascript<'a> {
+            #[raw]
+            pattern_script: &'a str,
+            #[raw]
+            ipc_script: &'a str,
+            #[raw]
+            core_script: &'a str,
+            #[raw]
+            event_initialization_script: &'a str,
+            #[raw]
+            freeze_prototype: &'a str,
+        }
+
+        #[derive(Template)]
+        #[default_template("../scripts/core.js")]
+        struct CoreJavascript<'a> {
+            os_name: &'a str,
+            protocol_scheme: &'a str,
+            invoke_key: &'a str,
+        }
+
+        let core_script = CoreJavascript {
+            os_name: std::env::consts::OS,
+            protocol_scheme: if use_https_scheme { "https" } else { "http" },
+            invoke_key: "",
+        }
+        .render_default(&Default::default())?
+        .into_string();
+
+        let event_script = Self::event_initialization_script(
+            "__TAURINO_EVENT__",
+            "__TAURINO_LISTENERS__",
+        );
+
+        InitJavascript {
+            pattern_script,
+            ipc_script,
+            core_script: &core_script,
+            event_initialization_script: &event_script,
+            freeze_prototype: "",
+        }
+        .render_default(&Default::default())
+        .map(|script| script.into_string())
+        .map_err(Into::into)
+    }
+
     pub fn resize_webviews(
         &self,
         window: &Window,
         size: tao::dpi::PhysicalSize<u32>,
     ) {
         let size = size.to_logical::<f32>(window.scale_factor());
-
         let webviews = self.webviews_lock();
 
         for webview in webviews.values() {
@@ -377,26 +665,27 @@ impl Manager {
                 .expect("poisoned webview bounds")
                 .clone();
 
-            let Some(b) = bounds else {
+            let Some(bounds) = bounds else {
                 continue;
             };
 
-            if let Err(e) = webview.set_bounds(wry::Rect {
+            if let Err(error) = webview.set_bounds(wry::Rect {
                 position: LogicalPosition::new(
-                    size.width * b.x_rate,
-                    size.height * b.y_rate,
+                    size.width * bounds.x_rate,
+                    size.height * bounds.y_rate,
                 )
                 .into(),
                 size: LogicalSize::new(
-                    size.width * b.width_rate,
-                    size.height * b.height_rate,
+                    size.width * bounds.width_rate,
+                    size.height * bounds.height_rate,
                 )
                 .into(),
             }) {
-                eprintln!("failed to autoresize webview: {e}");
+                eprintln!("failed to autoresize webview: {error}");
             }
         }
     }
+
     pub fn create_webview(
         &mut self,
         window: &Window,

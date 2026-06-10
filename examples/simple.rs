@@ -1,42 +1,27 @@
-pub mod attributes;
-pub mod builder;
-pub mod error;
-pub mod events;
-pub mod factory;
-pub mod platform;
-/* pub mod image; */
-pub mod async_runtime;
-pub mod manager;
-pub mod pending;
-pub mod types;
-pub mod utils;
-pub mod webview;
-pub mod wrapper;
-
-pub(crate) mod protocol;
-
 use tao::{
     event::{Event, WindowEvent},
     event_loop::{ControlFlow, EventLoop},
     window::WindowBuilder,
 };
 
-use crate::{builder::WebViewBuilder, error::Error, manager::Manager};
-
-/// Result type.
-pub type Result<T> = std::result::Result<T, Error>;
+use taurino_webview::{
+    Result,
+    builder::WebViewBuilder,
+    manager::{Manager, ManagerConfig},
+};
 
 fn main() -> Result<()> {
     // Beispiel 1: lokale HTML-Dateien aus dem dist-Ordner.
-    local_html_example()
+    // Zum Testen einfach oben auskommentieren und diese Zeile aktivieren:
+    //  local_html_example()
 
     // Beispiel 2: externe Webseiten.
     // Zum Testen einfach oben auskommentieren und diese Zeile aktivieren:
     //
-    // external_url_example()
+    external_url_example()
 }
 
-fn local_html_example() -> Result<()> {
+/* fn local_html_example() -> Result<()> {
     let event_loop = EventLoop::new();
 
     let window = WindowBuilder::new()
@@ -44,9 +29,16 @@ fn local_html_example() -> Result<()> {
         .build(&event_loop)
         .expect("failed to create tao window");
 
-    let mut manager = Manager::new()?
-        .set_window_id(window.id())
-        .set_static_dir("dist");
+
+
+
+
+
+
+
+    let config = ManagerConfig::new()?.set_static_dir("dist");
+
+    let mut manager = Manager::new()?.set_window_id(window.id()).set_manager_config(config);
 
     let pages = [
         ("webview-top-left", "top-left.html"),
@@ -103,9 +95,8 @@ fn local_html_example() -> Result<()> {
             _ => {}
         }
     })
-}
+} */
 
-/*
 fn external_url_example() -> Result<()> {
     let event_loop = EventLoop::new();
 
@@ -114,9 +105,11 @@ fn external_url_example() -> Result<()> {
         .build(&event_loop)
         .expect("failed to create tao window");
 
+    let config = ManagerConfig::new()?.set_static_dir("dist");
+
     let mut manager = Manager::new()?
         .set_window_id(window.id())
-        .set_static_dir("dist");
+        .set_manager_config(config);
 
     let urls = [
         ("webview-top-left", "https://tauri.app"),
@@ -134,13 +127,10 @@ fn external_url_example() -> Result<()> {
     let layouts = [
         // oben links
         (0.0, 0.0, half_width, half_height),
-
         // oben rechts
         (half_width, 0.0, half_width, half_height),
-
         // unten links
         (0.0, half_height, half_width, half_height),
-
         // unten rechts
         (half_width, half_height, half_width, half_height),
     ];
@@ -176,4 +166,3 @@ fn external_url_example() -> Result<()> {
         }
     })
 }
-*/

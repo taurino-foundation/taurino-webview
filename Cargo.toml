@@ -6,8 +6,8 @@ exclude = ["/target", "/examples"]
 readme = "README.md"
 
 [dependencies]
-serialize-to-javascript = { version = "0.1.2", optional = true }
-schemars = { version = "0.8.21", features = ["url", "uuid1"], optional = true }
+serialize-to-javascript ="0.1.2"
+schemars = { version = "0.8.21", features = ["url", "uuid1"] ,optional = true}
 serde_with = "3"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
@@ -15,7 +15,7 @@ thiserror = "2"
 glob = "0.3.1"
 urlpattern = "0.3"
 regex = "1"
-tracing = { version = "0.1", optional = true }
+tracing = "0.1"
 log = "0.4.21"
 
 wry = { version = "0.55.0", default-features = false, features = [
@@ -121,7 +121,7 @@ macos-private-api = [
 
 objc-exception = []
 
-tracing = ["dep:tracing", "wry/tracing"]
+tracing = ["wry/tracing"]
 macos-proxy = ["wry/mac-proxy"]
 
 unstable = []
@@ -129,11 +129,20 @@ common-controls-v6 = []
 webview-data-url = []
 full = [
   "webview-data-url",
-  "schema",
-  "serialize-to-javascript",
   "devtools",
-  "tracing",
   "macos-proxy",
   "unstable",
   "common-controls-v6",
 ]
+
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = "symbols"
+debug = false
+incremental = false
+debug-assertions = false
+overflow-checks = false

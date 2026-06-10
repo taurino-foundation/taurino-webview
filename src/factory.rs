@@ -75,6 +75,7 @@ pub(crate) fn create_wry_webview(
     } = pending;
 
     let mut web_context = manager
+        .config
         .web_context()
         .lock()
         .expect("poisoned WebContext store");
@@ -730,7 +731,7 @@ pub(crate) fn create_wry_webview(
         label,
         id,
         inner: Rc::new(webview),
-        context_store: manager.web_context().clone(),
+        context_store: manager.config.web_context().clone(),
         /*  webview_event_listeners: Default::default(), */
         context_key: if automation_enabled {
             None
