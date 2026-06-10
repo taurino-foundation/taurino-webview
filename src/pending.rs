@@ -4,9 +4,9 @@ use std::sync::Arc;
 
 use crate::attributes::WebviewAttributes;
 use crate::utils::{
-    DocumentTitleChangedHandler, DownloadHandler, NavigationHandler,
-    NewWindowHandler, OnPageLoadHandler, ProxyHandler,
-    UriSchemeProtocolHandler, WebResourceRequestHandler, WebviewIpcHandler,
+    DocumentTitleChangedHandler, DownloadHandler, NavigationHandler, NewWindowHandler,
+    OnPageLoadHandler, ProxyHandler, UriSchemeProtocolHandler, WebResourceRequestHandler,
+    WebviewIpcHandler,
 };
 
 /// A webview that has yet to be built.
@@ -16,8 +16,7 @@ pub struct PendingWebview {
     pub kind: bool,
     /// The [`WebviewAttributes`] that the webview will be created with.
     pub webview_attributes: WebviewAttributes,
-    pub(crate) uri_scheme_protocols:
-        HashMap<String, Box<UriSchemeProtocolHandler>>,
+    pub(crate) uri_scheme_protocols: HashMap<String, Box<UriSchemeProtocolHandler>>,
     pub url: String,
     /// How to handle IPC calls on the webview.
     pub ipc_handler: Option<WebviewIpcHandler>,
@@ -27,17 +26,12 @@ pub struct PendingWebview {
 
     pub new_window_handler: Option<Box<NewWindowHandler>>,
 
-    pub document_title_changed_handler:
-        Option<Box<DocumentTitleChangedHandler>>,
+    pub document_title_changed_handler: Option<Box<DocumentTitleChangedHandler>>,
 
     #[cfg(target_os = "android")]
     #[allow(clippy::type_complexity)]
     pub on_webview_created: Option<
-        Box<
-            dyn Fn(CreationContext<'_, '_>) -> Result<(), jni::errors::Error>
-                + Send
-                + Sync,
-        >,
+        Box<dyn Fn(CreationContext<'_, '_>) -> Result<(), jni::errors::Error> + Send + Sync>,
     >,
 
     pub web_resource_request_handler: Option<Box<WebResourceRequestHandler>>,
@@ -47,18 +41,13 @@ pub struct PendingWebview {
     pub download_handler: Option<Arc<DownloadHandler>>,
 
     #[cfg(any(target_os = "macos", target_os = "ios"))]
-    pub on_web_content_process_terminate_handler:
-        Option<Box<OnWebContentProcessTerminateHandler>>,
+    pub on_web_content_process_terminate_handler: Option<Box<OnWebContentProcessTerminateHandler>>,
 
     pub proxy_handler: Option<ProxyHandler>,
 }
 
 impl PendingWebview {
-    pub fn new<L>(
-        label: L,
-        kind: bool,
-        webview_attributes: WebviewAttributes,
-    ) -> Self
+    pub fn new<L>(label: L, kind: bool, webview_attributes: WebviewAttributes) -> Self
     where
         L: Into<String>,
     {

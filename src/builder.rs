@@ -1,14 +1,13 @@
-use std::path::PathBuf;
-
-use dpi::{LogicalPosition, LogicalSize};
-use url::Url;
-
+use crate::layout::LayoutBounds;
 use crate::{
     attributes::WebviewAttributes,
     pending::PendingWebview,
     types::{ScrollBarStyle, WebviewUrl},
     wrapper::Rect,
 };
+use dpi::{LogicalPosition, LogicalSize};
+use std::path::PathBuf;
+use url::Url;
 
 pub struct WebViewBuilder {
     label: String,
@@ -57,10 +56,10 @@ impl WebViewBuilder {
         self
     }
 
-    pub fn bounds(mut self, x: f32, y: f32, width: f32, height: f32) -> Self {
+    pub fn bounds_rect(mut self, bounds: LayoutBounds) -> Self {
         self.attrs.bounds = Some(Rect {
-            position: LogicalPosition::new(x, y).into(),
-            size: LogicalSize::new(width, height).into(),
+            position: LogicalPosition::new(bounds.x, bounds.y).into(),
+            size: LogicalSize::new(bounds.width, bounds.height).into(),
         });
 
         self

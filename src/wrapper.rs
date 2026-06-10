@@ -71,8 +71,7 @@ impl From<Rect> for RectWrapper {
 }
 
 /// Assets iterator.
-pub type AssetsIter<'a> =
-    dyn Iterator<Item = (Cow<'a, str>, Cow<'a, [u8]>)> + 'a;
+pub type AssetsIter<'a> = dyn Iterator<Item = (Cow<'a, str>, Cow<'a, [u8]>)> + 'a;
 
 /// Represent an asset file path in a normalized way.
 ///

@@ -1,12 +1,9 @@
-use crate::events::{
-    DownloadEvent, DragDropEvent, PageLoadEvent, SynthesizedEvent,
-};
+use crate::events::{DownloadEvent, DragDropEvent, PageLoadEvent, SynthesizedEvent};
 use crate::pending::PendingWebview;
 use crate::types::{BackgroundThrottlingPolicy, ScrollBarStyle};
 use crate::utils::{
-    IpcHandler, NewWindowFeatures, NewWindowOpener, NewWindowResponse,
-    WebContext, WebViewMetaData, WebviewBounds, WebviewIpcHandler,
-    parse_proxy_url,
+    IpcHandler, NewWindowFeatures, NewWindowOpener, NewWindowResponse, WebContext, WebViewMetaData,
+    WebviewBounds, WebviewIpcHandler, parse_proxy_url,
 };
 
 use crate::webview::{WebView, WebviewId};
@@ -80,8 +77,7 @@ pub(crate) fn create_wry_webview(
         .lock()
         .expect("poisoned WebContext store");
     let is_first_context = web_context.is_empty();
-    let automation_enabled =
-        std::env::var("TAURI_WEBVIEW_AUTOMATION").as_deref() == Ok("true");
+    let automation_enabled = std::env::var("TAURI_WEBVIEW_AUTOMATION").as_deref() == Ok("true");
     let web_context_key = webview_attributes.data_directory;
 
     let entry = web_context.entry(web_context_key.clone());
@@ -106,43 +102,27 @@ pub(crate) fn create_wry_webview(
         }
     };
 
-    let mut webview_builder =
-        WebViewBuilder::new_with_web_context(&mut web_context.inner)
-            .with_id(&label)
-            .with_focused(webview_attributes.focus)
-            .with_transparent(webview_attributes.transparent)
-            .with_accept_first_mouse(webview_attributes.accept_first_mouse)
-            .with_incognito(webview_attributes.incognito)
-            .with_clipboard(webview_attributes.clipboard)
-            .with_hotkeys_zoom(webview_attributes.zoom_hotkeys_enabled)
-            .with_general_autofill_enabled(
-                webview_attributes.general_autofill_enabled,
-            );
+    let mut webview_builder = WebViewBuilder::new_with_web_context(&mut web_context.inner)
+        .with_id(&label)
+        .with_focused(webview_attributes.focus)
+        .with_transparent(webview_attributes.transparent)
+        .with_accept_first_mouse(webview_attributes.accept_first_mouse)
+        .with_incognito(webview_attributes.incognito)
+        .with_clipboard(webview_attributes.clipboard)
+        .with_hotkeys_zoom(webview_attributes.zoom_hotkeys_enabled)
+        .with_general_autofill_enabled(webview_attributes.general_autofill_enabled);
 
     #[cfg(target_os = "macos")]
-    if let Some(webview_configuration) =
-        webview_attributes.webview_configuration
-    {
-        webview_builder =
-            webview_builder.with_webview_configuration(webview_configuration);
+    if let Some(webview_configuration) = webview_attributes.webview_configuration {
+        webview_builder = webview_builder.with_webview_configuration(webview_configuration);
     }
 
-    if let Some(background_throttling) =
-        webview_attributes.background_throttling
-    {
-        webview_builder = webview_builder.with_background_throttling(
-            match background_throttling {
-                BackgroundThrottlingPolicy::Disabled => {
-                    wry::BackgroundThrottlingPolicy::Disabled
-                }
-                BackgroundThrottlingPolicy::Suspend => {
-                    wry::BackgroundThrottlingPolicy::Suspend
-                }
-                BackgroundThrottlingPolicy::Throttle => {
-                    wry::BackgroundThrottlingPolicy::Throttle
-                }
-            },
-        );
+    if let Some(background_throttling) = webview_attributes.background_throttling {
+        webview_builder = webview_builder.with_background_throttling(match background_throttling {
+            BackgroundThrottlingPolicy::Disabled => wry::BackgroundThrottlingPolicy::Disabled,
+            BackgroundThrottlingPolicy::Suspend => wry::BackgroundThrottlingPolicy::Suspend,
+            BackgroundThrottlingPolicy::Throttle => wry::BackgroundThrottlingPolicy::Throttle,
+        });
     }
 
     if webview_attributes.javascript_disabled {
@@ -164,89 +144,78 @@ pub(crate) fn create_wry_webview(
         let webviews_store = Arc::clone(&webviews_store);
         let current_window_id = window_id.clone();
 
-        webview_builder = webview_builder.with_new_window_req_handler(
-            move |url, features| {
-                let Ok(url) = url.parse() else {
-                    return wry::NewWindowResponse::Deny;
-                };
+        webview_builder = webview_builder.with_new_window_req_handler(move |url, features| {
+            let Ok(url) = url.parse() else {
+                return wry::NewWindowResponse::Deny;
+            };
 
-                let response = new_window_handler(
-                    url,
-                    NewWindowFeatures::new(
-                        features.size,
-                        features.position,
-                        NewWindowOpener {
-                            webview: features.opener.webview,
+            let response = new_window_handler(
+                url,
+                NewWindowFeatures::new(
+                    features.size,
+                    features.position,
+                    NewWindowOpener {
+                        webview: features.opener.webview,
 
-                            #[cfg(windows)]
-                            environment: features.opener.environment,
+                        #[cfg(windows)]
+                        environment: features.opener.environment,
 
-                            #[cfg(target_os = "macos")]
-                            target_configuration: features
-                                .opener
-                                .target_configuration,
-                        },
-                    ),
-                );
+                        #[cfg(target_os = "macos")]
+                        target_configuration: features.opener.target_configuration,
+                    },
+                ),
+            );
 
-                match response {
-                    NewWindowResponse::Allow => wry::NewWindowResponse::Allow,
+            match response {
+                NewWindowResponse::Allow => wry::NewWindowResponse::Allow,
 
-                    NewWindowResponse::Deny => wry::NewWindowResponse::Deny,
+                NewWindowResponse::Deny => wry::NewWindowResponse::Deny,
 
-                    #[cfg(not(any(target_os = "android", target_os = "ios")))]
-                    NewWindowResponse::Create { window_id } => {
-                        let Some(this_window_id) =
-                            *current_window_id.lock().unwrap()
-                        else {
-                            return wry::NewWindowResponse::Deny;
-                        };
+                #[cfg(not(any(target_os = "android", target_os = "ios")))]
+                NewWindowResponse::Create { window_id } => {
+                    let Some(this_window_id) = *current_window_id.lock().unwrap() else {
+                        return wry::NewWindowResponse::Deny;
+                    };
 
-                        if window_id != this_window_id {
-                            return wry::NewWindowResponse::Deny;
-                        }
+                    if window_id != this_window_id {
+                        return wry::NewWindowResponse::Deny;
+                    }
 
-                        let target_webview = {
-                            let webviews = webviews_store
-                                .lock()
-                                .expect("poisoned webview manager");
+                    let target_webview = {
+                        let webviews = webviews_store.lock().expect("poisoned webview manager");
 
-                            webviews.values().next().cloned()
-                        };
+                        webviews.values().next().cloned()
+                    };
 
-                        let Some(target_webview) = target_webview else {
-                            return wry::NewWindowResponse::Deny;
-                        };
+                    let Some(target_webview) = target_webview else {
+                        return wry::NewWindowResponse::Deny;
+                    };
 
-                        wry::NewWindowResponse::Create {
-                            #[cfg(target_os = "macos")]
-                            webview: wry::WebViewExtMacOS::webview(
-                                &*target_webview,
-                            )
+                    wry::NewWindowResponse::Create {
+                        #[cfg(target_os = "macos")]
+                        webview: wry::WebViewExtMacOS::webview(&*target_webview)
                             .as_super()
                             .into(),
 
-                            #[cfg(any(
-                                target_os = "linux",
-                                target_os = "dragonfly",
-                                target_os = "freebsd",
-                                target_os = "netbsd",
-                                target_os = "openbsd",
-                            ))]
-                            webview: target_webview.webview(),
+                        #[cfg(any(
+                            target_os = "linux",
+                            target_os = "dragonfly",
+                            target_os = "freebsd",
+                            target_os = "netbsd",
+                            target_os = "openbsd",
+                        ))]
+                        webview: target_webview.webview(),
 
-                            #[cfg(windows)]
-                            webview: target_webview.webview(),
-                        }
+                        #[cfg(windows)]
+                        webview: target_webview.webview(),
                     }
                 }
-            },
-        );
+            }
+        });
     }
-    if let Some(document_title_changed_handler) = document_title_changed_handler
-    {
-        webview_builder = webview_builder
-            .with_document_title_changed_handler(document_title_changed_handler)
+    if let Some(document_title_changed_handler) = document_title_changed_handler {
+        webview_builder =
+            webview_builder.with_document_title_changed_handler(document_title_changed_handler)
     }
 
     let webview_bounds = if let Some(bounds) = webview_attributes.bounds {
@@ -290,47 +259,36 @@ pub(crate) fn create_wry_webview(
 
     if let Some(download_handler) = download_handler {
         let download_handler_ = download_handler.clone();
+        webview_builder = webview_builder.with_download_started_handler(move |url, path| {
+            if let Ok(url) = url.parse() {
+                download_handler_(DownloadEvent::Requested {
+                    url,
+                    destination: path,
+                })
+            } else {
+                false
+            }
+        });
         webview_builder =
-            webview_builder.with_download_started_handler(move |url, path| {
+            webview_builder.with_download_completed_handler(move |url, path, success| {
                 if let Ok(url) = url.parse() {
-                    download_handler_(DownloadEvent::Requested {
-                        url,
-                        destination: path,
-                    })
-                } else {
-                    false
+                    download_handler(DownloadEvent::Finished { url, path, success });
                 }
             });
-        webview_builder = webview_builder.with_download_completed_handler(
-            move |url, path, success| {
-                if let Ok(url) = url.parse() {
-                    download_handler(DownloadEvent::Finished {
-                        url,
-                        path,
-                        success,
-                    });
-                }
-            },
-        );
     }
 
     if let Some(page_load_handler) = on_page_load_handler {
-        webview_builder =
-            webview_builder.with_on_page_load_handler(move |event, url| {
-                let _ = url.parse().map(|url| {
-                    page_load_handler(
-                        url,
-                        match event {
-                            wry::PageLoadEvent::Started => {
-                                PageLoadEvent::Started
-                            }
-                            wry::PageLoadEvent::Finished => {
-                                PageLoadEvent::Finished
-                            }
-                        },
-                    )
-                });
+        webview_builder = webview_builder.with_on_page_load_handler(move |event, url| {
+            let _ = url.parse().map(|url| {
+                page_load_handler(
+                    url,
+                    match event {
+                        wry::PageLoadEvent::Started => PageLoadEvent::Started,
+                        wry::PageLoadEvent::Finished => PageLoadEvent::Finished,
+                    },
+                )
             });
+        });
     }
 
     if let Some(user_agent) = webview_attributes.user_agent {
@@ -344,11 +302,9 @@ pub(crate) fn create_wry_webview(
     }
 
     {
-        if let Some(additional_browser_args) =
-            webview_attributes.additional_browser_args
-        {
-            webview_builder = webview_builder
-                .with_additional_browser_args(&additional_browser_args);
+        if let Some(additional_browser_args) = webview_attributes.additional_browser_args {
+            webview_builder =
+                webview_builder.with_additional_browser_args(&additional_browser_args);
         }
 
         if let Some(environment) = webview_attributes.environment {
@@ -361,23 +317,19 @@ pub(crate) fn create_wry_webview(
             _ => wry::Theme::Light,
         });
 
-        webview_builder = webview_builder.with_scroll_bar_style(
-            match webview_attributes.scroll_bar_style {
+        webview_builder =
+            webview_builder.with_scroll_bar_style(match webview_attributes.scroll_bar_style {
                 ScrollBarStyle::Default => WryScrollBarStyle::Default,
-                ScrollBarStyle::FluentOverlay => {
-                    WryScrollBarStyle::FluentOverlay
-                }
+                ScrollBarStyle::FluentOverlay => WryScrollBarStyle::FluentOverlay,
                 #[allow(unreachable_patterns)]
                 _ => unreachable!(),
-            },
-        );
+            });
     }
 
     #[cfg(windows)]
     {
-        webview_builder = webview_builder.with_browser_extensions_enabled(
-            webview_attributes.browser_extensions_enabled,
-        );
+        webview_builder = webview_builder
+            .with_browser_extensions_enabled(webview_attributes.browser_extensions_enabled);
     }
 
     #[cfg(any(
@@ -409,80 +361,71 @@ pub(crate) fn create_wry_webview(
 
     #[cfg(any(target_os = "macos", target_os = "ios"))]
     {
-        if let Some(data_store_identifier) =
-            &webview_attributes.data_store_identifier
-        {
-            webview_builder = webview_builder
-                .with_data_store_identifier(*data_store_identifier);
+        if let Some(data_store_identifier) = &webview_attributes.data_store_identifier {
+            webview_builder = webview_builder.with_data_store_identifier(*data_store_identifier);
         }
     }
     if let Some(handler) = proxy_handler.as_ref().cloned() {
         if webview_attributes.drag_drop_handler_enabled {
             let window_id_ = window_id.clone();
 
-            webview_builder =
-                webview_builder.with_drag_drop_handler(move |event| {
-                    let event = match event {
-                        WryDragDropEvent::Enter {
-                            paths,
-                            position: (x, y),
-                        } => DragDropEvent::Enter {
-                            paths,
-                            position: PhysicalPosition::new(x as _, y as _),
-                        },
+            webview_builder = webview_builder.with_drag_drop_handler(move |event| {
+                let event = match event {
+                    WryDragDropEvent::Enter {
+                        paths,
+                        position: (x, y),
+                    } => DragDropEvent::Enter {
+                        paths,
+                        position: PhysicalPosition::new(x as _, y as _),
+                    },
 
-                        WryDragDropEvent::Over { position: (x, y) } => {
-                            DragDropEvent::Over {
-                                position: PhysicalPosition::new(x as _, y as _),
-                            }
-                        }
+                    WryDragDropEvent::Over { position: (x, y) } => DragDropEvent::Over {
+                        position: PhysicalPosition::new(x as _, y as _),
+                    },
 
-                        WryDragDropEvent::Drop {
-                            paths,
-                            position: (x, y),
-                        } => DragDropEvent::Drop {
-                            paths,
-                            position: PhysicalPosition::new(x as _, y as _),
-                        },
+                    WryDragDropEvent::Drop {
+                        paths,
+                        position: (x, y),
+                    } => DragDropEvent::Drop {
+                        paths,
+                        position: PhysicalPosition::new(x as _, y as _),
+                    },
 
-                        WryDragDropEvent::Leave => DragDropEvent::Leave,
+                    WryDragDropEvent::Leave => DragDropEvent::Leave,
 
-                        _ => return true,
-                    };
+                    _ => return true,
+                };
 
-                    let message = if !kind {
-                        SynthesizedEvent::window_drag_drop(event)
-                    } else {
-                        SynthesizedEvent::webview_drag_drop(event)
-                    };
+                let message = if !kind {
+                    SynthesizedEvent::window_drag_drop(event)
+                } else {
+                    SynthesizedEvent::webview_drag_drop(event)
+                };
 
-                    let Some(window_id) = *window_id_.lock().unwrap() else {
-                        return true;
-                    };
+                let Some(window_id) = *window_id_.lock().unwrap() else {
+                    return true;
+                };
 
-                    handler(window_id, id, message);
-                    true
-                });
+                handler(window_id, id, message);
+                true
+            });
         }
     }
 
     #[cfg(target_os = "ios")]
     {
-        if let Some(input_accessory_view_builder) =
-            webview_attributes.input_accessory_view_builder
+        if let Some(input_accessory_view_builder) = webview_attributes.input_accessory_view_builder
         {
-            webview_builder = webview_builder
-                .with_input_accessory_view_builder(move |webview| {
-                    input_accessory_view_builder.0(webview)
-                });
+            webview_builder = webview_builder.with_input_accessory_view_builder(move |webview| {
+                input_accessory_view_builder.0(webview)
+            });
         }
     }
 
     #[cfg(target_os = "macos")]
     {
         if let Some(position) = &webview_attributes.traffic_light_position {
-            webview_builder =
-                webview_builder.with_traffic_light_inset(*position);
+            webview_builder = webview_builder.with_traffic_light_inset(*position);
         }
     }
 
@@ -497,10 +440,7 @@ pub(crate) fn create_wry_webview(
 
     for script in webview_attributes.initialization_scripts {
         webview_builder = webview_builder
-            .with_initialization_script_for_main_only(
-                script.script,
-                script.for_main_frame_only,
-            );
+            .with_initialization_script_for_main_only(script.script, script.for_main_frame_only);
     }
 
     for (scheme, protocol) in uri_scheme_protocols {
@@ -520,8 +460,8 @@ pub(crate) fn create_wry_webview(
 
     #[cfg(any(debug_assertions, feature = "devtools"))]
     {
-        webview_builder = webview_builder
-            .with_devtools(webview_attributes.devtools.unwrap_or(true));
+        webview_builder =
+            webview_builder.with_devtools(webview_attributes.devtools.unwrap_or(true));
     }
 
     if url != "about:blank" {
@@ -579,8 +519,7 @@ pub(crate) fn create_wry_webview(
 
         if let Some(handler) = proxy_handler {
             use webview2_com::{
-                ContainsFullScreenElementChangedEventHandler,
-                FocusChangedEventHandler,
+                ContainsFullScreenElementChangedEventHandler, FocusChangedEventHandler,
             };
 
             // GotFocus ---------------------------------------------------------
@@ -594,37 +533,30 @@ pub(crate) fn create_wry_webview(
 
                 unsafe {
                     controller.add_GotFocus(
-                        &FocusChangedEventHandler::create(Box::new(
-                            move |_, _| {
-                                let mut focused_webview =
-                                    focused_webview_.lock().unwrap();
+                        &FocusChangedEventHandler::create(Box::new(move |_, _| {
+                            let mut focused_webview = focused_webview_.lock().unwrap();
 
-                                // Multi-webview mode:
-                                // If any webview is already focused, this is only a webview-to-webview focus change.
-                                // If no webview is focused yet, this is a real window focus change.
-                                let already_focused = focused_webview.is_some();
+                            // Multi-webview mode:
+                            // If any webview is already focused, this is only a webview-to-webview focus change.
+                            // If no webview is focused yet, this is a real window focus change.
+                            let already_focused = focused_webview.is_some();
 
-                                focused_webview.replace(label_.clone());
+                            focused_webview.replace(label_.clone());
 
-                                if !already_focused {
-                                    let Some(window_id) =
-                                        *window_id_.lock().unwrap()
-                                    else {
-                                        return Ok(());
-                                    };
+                            if !already_focused {
+                                let Some(window_id) = *window_id_.lock().unwrap() else {
+                                    return Ok(());
+                                };
 
-                                    handler(
-                                        window_id,
-                                        webview_id,
-                                        SynthesizedEvent::window_focus_changed(
-                                            true,
-                                        ),
-                                    );
-                                }
+                                handler(
+                                    window_id,
+                                    webview_id,
+                                    SynthesizedEvent::window_focus_changed(true),
+                                );
+                            }
 
-                                Ok(())
-                            },
-                        )),
+                            Ok(())
+                        })),
                         &mut got_focus_token,
                     )
                 }
@@ -642,42 +574,34 @@ pub(crate) fn create_wry_webview(
 
                 unsafe {
                     controller.add_LostFocus(
-                        &FocusChangedEventHandler::create(Box::new(
-                            move |_, _| {
-                                let mut focused_webview =
-                                    focused_webview_.lock().unwrap();
+                        &FocusChangedEventHandler::create(Box::new(move |_, _| {
+                            let mut focused_webview = focused_webview_.lock().unwrap();
 
-                                // Multi-webview mode:
-                                // If another webview got focus before this LostFocus event,
-                                // focused_webview contains the other webview label.
-                                // Then this is NOT a real window focus loss.
-                                let lost_window_focus = focused_webview
-                                    .as_ref()
-                                    .map_or(true, |w| w == &label_);
+                            // Multi-webview mode:
+                            // If another webview got focus before this LostFocus event,
+                            // focused_webview contains the other webview label.
+                            // Then this is NOT a real window focus loss.
+                            let lost_window_focus =
+                                focused_webview.as_ref().map_or(true, |w| w == &label_);
 
-                                if lost_window_focus {
-                                    // Only reset when the whole window lost focus.
-                                    // Otherwise another webview is focused now.
-                                    *focused_webview = None;
+                            if lost_window_focus {
+                                // Only reset when the whole window lost focus.
+                                // Otherwise another webview is focused now.
+                                *focused_webview = None;
 
-                                    let Some(window_id) =
-                                        *window_id_.lock().unwrap()
-                                    else {
-                                        return Ok(());
-                                    };
+                                let Some(window_id) = *window_id_.lock().unwrap() else {
+                                    return Ok(());
+                                };
 
-                                    handler(
-                                        window_id,
-                                        webview_id,
-                                        SynthesizedEvent::window_focus_changed(
-                                            true,
-                                        ),
-                                    );
-                                }
+                                handler(
+                                    window_id,
+                                    webview_id,
+                                    SynthesizedEvent::window_focus_changed(true),
+                                );
+                            }
 
-                                Ok(())
-                            },
-                        )),
+                            Ok(())
+                        })),
                         &mut lost_focus_token,
                     )
                 }
@@ -693,20 +617,16 @@ pub(crate) fn create_wry_webview(
 
                 unsafe {
                     let _ = core_webview.add_ContainsFullScreenElementChanged(
-                        &ContainsFullScreenElementChangedEventHandler::create(
-                            Box::new(move |sender, _| {
+                        &ContainsFullScreenElementChangedEventHandler::create(Box::new(
+                            move |sender, _| {
                                 let mut contains_fullscreen_element =
                                     windows::core::BOOL::default();
 
                                 sender
                                     .ok_or_else(windows::core::Error::empty)?
-                                    .ContainsFullScreenElement(
-                                        &mut contains_fullscreen_element,
-                                    )?;
+                                    .ContainsFullScreenElement(&mut contains_fullscreen_element)?;
 
-                                let Some(window_id) =
-                                    *window_id_.lock().unwrap()
-                                else {
+                                let Some(window_id) = *window_id_.lock().unwrap() else {
                                     return Ok(());
                                 };
 
@@ -718,8 +638,8 @@ pub(crate) fn create_wry_webview(
                                     ),
                                 );
                                 Ok(())
-                            }),
-                        ),
+                            },
+                        )),
                         &mut fullscreen_token,
                     );
                 }

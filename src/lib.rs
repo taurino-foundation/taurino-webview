@@ -6,6 +6,7 @@ pub mod events;
 pub mod factory;
 pub mod manager;
 /* pub mod pattern; */
+pub mod layout;
 pub mod pending;
 pub mod platform;
 pub(crate) mod protocol;
@@ -13,7 +14,6 @@ pub mod types;
 pub mod utils;
 pub mod webview;
 pub mod wrapper;
-
 use crate::error::Error;
 
 /// Result type.

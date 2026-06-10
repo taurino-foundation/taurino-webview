@@ -3,11 +3,11 @@ use tao::{
     event_loop::{ControlFlow, EventLoop},
     window::WindowBuilder,
 };
-
 use taurino_webview::{
-    builder::WebViewBuilder,
-    manager::{Manager, ManagerConfig},
     Result,
+    builder::WebViewBuilder,
+    layout::FixedLayout,
+    manager::{Manager, ManagerConfig},
 };
 
 fn main() -> Result<()> {
@@ -121,32 +121,17 @@ fn external_url_example() -> Result<()> {
     let scale_factor = window.scale_factor();
     let window_size = window.inner_size().to_logical::<f32>(scale_factor);
 
-    let half_width = window_size.width / 2.0;
-    let half_height = window_size.height / 2.0;
+    let layout = FixedLayout::Grid { rows: 2, cols: 2 };
 
-    let layouts = [
-        // Top left
-        (0.0, 0.0, half_width, half_height),
+    let bounds = layout.resolve(urls.len(), window_size.width, window_size.height);
 
-        // Top right
-        (half_width, 0.0, half_width, half_height),
-
-        // Bottom left
-        (0.0, half_height, half_width, half_height),
-
-        // Bottom right
-        (half_width, half_height, half_width, half_height),
-    ];
-
-    for ((label, url), (x, y, width, height)) in urls.into_iter().zip(layouts) {
+    for ((label, url), bounds) in urls.into_iter().zip(bounds.into_iter()) {
         let pending = WebViewBuilder::external(label, url)?
-            .auto_resize()
-            .bounds(x, y, width, height)
+            .bounds_rect(bounds)
             .build();
 
         manager.create_webview(&window, pending)?;
     }
-
     event_loop.run(move |event, _, control_flow| {
         *control_flow = ControlFlow::Wait;
 

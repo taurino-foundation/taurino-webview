@@ -8,8 +8,8 @@ use std::{
 use http::{
     HeaderMap, Method, Request, Response as HttpResponse, StatusCode,
     header::{
-        ACCESS_CONTROL_ALLOW_HEADERS, ACCESS_CONTROL_ALLOW_METHODS,
-        ACCESS_CONTROL_ALLOW_ORIGIN, CONTENT_TYPE,
+        ACCESS_CONTROL_ALLOW_HEADERS, ACCESS_CONTROL_ALLOW_METHODS, ACCESS_CONTROL_ALLOW_ORIGIN,
+        CONTENT_TYPE,
     },
 };
 
@@ -17,8 +17,7 @@ use percent_encoding::percent_decode;
 use reqwest::Client;
 
 use crate::{
-    async_runtime, async_runtime::Mutex, types::FrontendDist,
-    utils::ManagerUriSchemeProtocol,
+    async_runtime, async_runtime::Mutex, types::FrontendDist, utils::ManagerUriSchemeProtocol,
 };
 
 const APP_PROTOCOL: &str = "taurino";
@@ -77,8 +76,7 @@ async fn get_response(
         return empty_response(StatusCode::NO_CONTENT, &context.window_origin);
     }
 
-    let proxy_dev_server =
-        matches!(context.frontend_dist, Some(FrontendDist::Url(_)));
+    let proxy_dev_server = matches!(context.frontend_dist, Some(FrontendDist::Url(_)));
 
     let path = request_path(&request, proxy_dev_server);
 
@@ -103,13 +101,9 @@ async fn get_response(
             .await
         }
 
-        Some(FrontendDist::Directory(root)) => {
-            serve_directory(root, path, builder, &request).await
-        }
+        Some(FrontendDist::Directory(root)) => serve_directory(root, path, builder, &request).await,
 
-        Some(FrontendDist::Files(files)) => {
-            serve_files(files, path, builder, &request).await
-        }
+        Some(FrontendDist::Files(files)) => serve_files(files, path, builder, &request).await,
 
         None => Ok(error_response(
             StatusCode::NOT_FOUND,
@@ -149,9 +143,10 @@ async fn proxy_dev_request(
         proxy_builder = proxy_builder.body(request.body().clone());
     }
 
-    let response = proxy_builder.send().await.map_err(|error| {
-        format!("Failed to request dev server URL `{url}`: {error}")
-    })?;
+    let response = proxy_builder
+        .send()
+        .await
+        .map_err(|error| format!("Failed to request dev server URL `{url}`: {error}"))?;
 
     let status = response.status();
 
@@ -343,10 +338,7 @@ fn safe_asset_path(root: &Path, uri_path: &str) -> Option<PathBuf> {
     Some(output)
 }
 
-fn empty_response(
-    status: StatusCode,
-    window_origin: &str,
-) -> Result<ProtocolResponse, BoxError> {
+fn empty_response(status: StatusCode, window_origin: &str) -> Result<ProtocolResponse, BoxError> {
     Ok(HttpResponse::builder()
         .status(status)
         .header(ACCESS_CONTROL_ALLOW_ORIGIN, window_origin)
@@ -358,11 +350,7 @@ fn empty_response(
         .body(Cow::Owned(Vec::new()))?)
 }
 
-fn error_response(
-    status: StatusCode,
-    window_origin: &str,
-    message: &str,
-) -> ProtocolResponse {
+fn error_response(status: StatusCode, window_origin: &str, message: &str) -> ProtocolResponse {
     HttpResponse::builder()
         .status(status)
         .header(CONTENT_TYPE, mime::TEXT_PLAIN.essence_str())
@@ -374,11 +362,7 @@ fn error_response(
 fn should_forward_request_header(name: &str) -> bool {
     !matches!(
         name.to_ascii_lowercase().as_str(),
-        "host"
-            | "connection"
-            | "content-length"
-            | "transfer-encoding"
-            | "upgrade"
+        "host" | "connection" | "content-length" | "transfer-encoding" | "upgrade"
     )
 }
 

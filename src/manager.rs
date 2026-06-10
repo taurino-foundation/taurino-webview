@@ -16,12 +16,13 @@ use url::Url;
 use crate::{
     attributes::InitializationScript,
     factory::create_wry_webview,
+    layout::FixedLayout,
     pending::PendingWebview,
     protocol,
     types::{FrontendDist, WebviewUrl},
     utils::{
-        ManagerUriSchemeContext, ManagerUriSchemeProtocol,
-        ManagerUriSchemeResponder, WebContextStore, is_local_network_url,
+        ManagerUriSchemeContext, ManagerUriSchemeProtocol, ManagerUriSchemeResponder,
+        WebContextStore, is_local_network_url,
     },
     webview::{WebView, WebviewId},
 };
@@ -207,8 +208,7 @@ pub struct Manager {
 
     pub webviews: Arc<Mutex<HashMap<String, WebView>>>,
 
-    pub(crate) uri_scheme_protocols:
-        Mutex<HashMap<String, Arc<ManagerUriSchemeProtocol>>>,
+    pub(crate) uri_scheme_protocols: Mutex<HashMap<String, Arc<ManagerUriSchemeProtocol>>>,
 
     next_webview_id: Arc<AtomicU32>,
     next_webview_event_id: Arc<AtomicU32>,
@@ -241,8 +241,7 @@ impl Manager {
     }
 
     pub fn set_window_id(self, window_id: WindowId) -> Self {
-        *self.window_id.lock().expect("poisoned window id manager") =
-            Some(window_id);
+        *self.window_id.lock().expect("poisoned window id manager") = Some(window_id);
 
         self
     }
@@ -256,15 +255,11 @@ impl Manager {
     }
 
     /// Get a locked handle to the webviews.
-    pub(crate) fn webviews_lock(
-        &self,
-    ) -> MutexGuard<'_, HashMap<String, WebView>> {
+    pub(crate) fn webviews_lock(&self) -> MutexGuard<'_, HashMap<String, WebView>> {
         self.webviews.lock().expect("poisoned webview manager")
     }
 
-    pub(crate) fn webviews_store(
-        &self,
-    ) -> Arc<Mutex<HashMap<String, WebView>>> {
+    pub(crate) fn webviews_store(&self) -> Arc<Mutex<HashMap<String, WebView>>> {
         Arc::clone(&self.webviews)
     }
 
@@ -314,10 +309,7 @@ impl Manager {
             .insert(uri_scheme, protocol);
     }
 
-    fn prepare_webview(
-        &mut self,
-        mut pending: PendingWebview,
-    ) -> crate::Result<PendingWebview> {
+    fn prepare_webview(&mut self, mut pending: PendingWebview) -> crate::Result<PendingWebview> {
         if self.webviews_lock().contains_key(&pending.label) {
             return Err(crate::Error::WebviewLabelAlreadyExists(pending.label));
         }
@@ -326,14 +318,10 @@ impl Manager {
 
         let mut url = match &pending.webview_attributes.url {
             WebviewUrl::App(path) => {
-                let app_url = self
-                    .get_app_url(pending.webview_attributes.use_https_scheme);
+                let app_url = self.get_app_url(pending.webview_attributes.use_https_scheme);
 
                 let url = if is_local_network_url(&app_url) {
-                    Cow::Owned(
-                        Url::parse("taurino://localhost")
-                            .expect("invalid app URL"),
-                    )
+                    Cow::Owned(Url::parse("taurino://localhost").expect("invalid app URL"))
                 } else {
                     app_url
                 };
@@ -347,8 +335,7 @@ impl Manager {
                 }
             }
             WebviewUrl::External(url) => {
-                let config_url = self
-                    .get_app_url(pending.webview_attributes.use_https_scheme);
+                let config_url = self.get_app_url(pending.webview_attributes.use_https_scheme);
                 let is_app_url = config_url.make_relative(url).is_some();
                 let url = url.clone();
 
@@ -388,8 +375,7 @@ impl Manager {
     ) -> crate::Result<PendingWebview> {
         let use_https_scheme = pending.webview_attributes.use_https_scheme;
 
-        let mut all_initialization_scripts: Vec<InitializationScript> =
-            Vec::new();
+        let mut all_initialization_scripts: Vec<InitializationScript> = Vec::new();
 
         fn main_frame_script(script: String) -> InitializationScript {
             InitializationScript {
@@ -424,21 +410,18 @@ impl Manager {
                 }}
             }});
             "#,
-            current_window_label =
-                serde_json::to_string(self.window_label.as_ref())?,
+            current_window_label = serde_json::to_string(self.window_label.as_ref())?,
             current_webview_label = serde_json::to_string(label)?,
         )));
 
         let ipc_script = "";
         let pattern_script = "";
 
-        all_initialization_scripts.push(main_frame_script(
-            self.initialization_script(
-                ipc_script,
-                pattern_script,
-                use_https_scheme,
-            )?,
-        ));
+        all_initialization_scripts.push(main_frame_script(self.initialization_script(
+            ipc_script,
+            pattern_script,
+            use_https_scheme,
+        )?));
 
         pending
             .webview_attributes
@@ -456,22 +439,14 @@ impl Manager {
             pending.internal_register_uri_scheme_protocol(
                 uri_scheme,
                 move |webview_id, request, responder| {
-                    let context = ManagerUriSchemeContext::new(
-                        window_label.as_ref(),
-                        webview_id,
-                    );
+                    let context = ManagerUriSchemeContext::new(window_label.as_ref(), webview_id);
 
-                    protocol.handle(
-                        context,
-                        request,
-                        ManagerUriSchemeResponder(responder),
-                    );
+                    protocol.handle(context, request, ManagerUriSchemeResponder(responder));
                 },
             );
         }
 
-        let window_url =
-            Url::parse(&pending.url).map_err(crate::Error::InvalidUrl)?;
+        let window_url = Url::parse(&pending.url).map_err(crate::Error::InvalidUrl)?;
         let window_origin = Self::window_origin(&window_url, use_https_scheme);
 
         self.register_builtin_protocols(
@@ -483,9 +458,7 @@ impl Manager {
         Ok(pending)
     }
 
-    fn registered_uri_scheme_protocols(
-        &self,
-    ) -> Vec<(String, Arc<ManagerUriSchemeProtocol>)> {
+    fn registered_uri_scheme_protocols(&self) -> Vec<(String, Arc<ManagerUriSchemeProtocol>)> {
         self.uri_scheme_protocols
             .lock()
             .expect("poisoned URI scheme protocol manager")
@@ -501,28 +474,17 @@ impl Manager {
         window_origin: String,
     ) {
         if !registered_scheme_protocols.contains(APP_PROTOCOL) {
-            let _web_resource_request_handler =
-                pending.web_resource_request_handler.take();
+            let _web_resource_request_handler = pending.web_resource_request_handler.take();
 
-            let app_protocol = protocol::get(
-                self.config.resource_path().cloned(),
-                &window_origin,
-            );
+            let app_protocol = protocol::get(self.config.resource_path().cloned(), &window_origin);
             let window_label = Arc::clone(&self.window_label);
 
             pending.internal_register_uri_scheme_protocol(
                 APP_PROTOCOL,
                 move |webview_id, request, responder| {
-                    let context = ManagerUriSchemeContext::new(
-                        window_label.as_ref(),
-                        webview_id,
-                    );
+                    let context = ManagerUriSchemeContext::new(window_label.as_ref(), webview_id);
 
-                    app_protocol.handle(
-                        context,
-                        request,
-                        ManagerUriSchemeResponder(responder),
-                    );
+                    app_protocol.handle(context, request, ManagerUriSchemeResponder(responder));
                 },
             );
 
@@ -566,10 +528,7 @@ impl Manager {
         "null".into()
     }
 
-    fn event_initialization_script(
-        function_name: &str,
-        listeners: &str,
-    ) -> String {
+    fn event_initialization_script(function_name: &str, listeners: &str) -> String {
         format!(
             r#"
             Object.defineProperty(window, '{function_name}', {{
@@ -633,10 +592,8 @@ impl Manager {
         .render_default(&Default::default())?
         .into_string();
 
-        let event_script = Self::event_initialization_script(
-            "__TAURINO_EVENT__",
-            "__TAURINO_LISTENERS__",
-        );
+        let event_script =
+            Self::event_initialization_script("__TAURINO_EVENT__", "__TAURINO_LISTENERS__");
 
         InitJavascript {
             pattern_script,
@@ -650,11 +607,7 @@ impl Manager {
         .map_err(Into::into)
     }
 
-    pub fn resize_webviews(
-        &self,
-        window: &Window,
-        size: tao::dpi::PhysicalSize<u32>,
-    ) {
+    pub fn resize_webviews(&self, window: &Window, size: tao::dpi::PhysicalSize<u32>) {
         let size = size.to_logical::<f32>(window.scale_factor());
         let webviews = self.webviews_lock();
 
@@ -686,6 +639,17 @@ impl Manager {
         }
     }
 
+    pub fn resize_webviews_with_layout(&self, window: &Window, layout: &FixedLayout) {
+        let size = window.inner_size().to_logical::<f32>(window.scale_factor());
+
+        let webviews = self.webviews_lock();
+
+        let bounds = layout.resolve(webviews.values().len(), size.width, size.height);
+
+        for (webview, bounds) in webviews.values().zip(bounds) {
+            let _ = webview.set_bounds(bounds.to_wry_rect());
+        }
+    }
     pub fn create_webview(
         &mut self,
         window: &Window,
@@ -693,12 +657,7 @@ impl Manager {
     ) -> crate::Result<()> {
         let pending = self.prepare_webview(pending)?;
 
-        let webview = create_wry_webview(
-            self.window_label.to_string(),
-            window,
-            pending,
-            self,
-        )?;
+        let webview = create_wry_webview(self.window_label.to_string(), window, pending, self)?;
 
         self.webviews_lock().insert(webview.label.clone(), webview);
 
