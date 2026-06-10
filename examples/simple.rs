@@ -123,7 +123,8 @@ fn external_url_example() -> Result<()> {
 
     let layout = FixedLayout::Grid { rows: 2, cols: 2 };
 
-    let bounds = layout.resolve(urls.len(), window_size.width, window_size.height);
+    let bounds =
+        layout.resolve(urls.len(), window_size.width, window_size.height);
 
     for ((label, url), bounds) in urls.into_iter().zip(bounds.into_iter()) {
         let pending = WebViewBuilder::external(label, url)?

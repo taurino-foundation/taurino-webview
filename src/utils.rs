@@ -5,8 +5,11 @@ use wry::{ProxyConfig, ProxyEndpoint, WebContext as WryWebContext};
 type ManagerUriSchemeResponderFn =
     Box<dyn FnOnce(http::Response<Cow<'static, [u8]>>) + Send + 'static>;
 
-type ManagerUriSchemeHandler = dyn for<'a> Fn(ManagerUriSchemeContext<'a>, http::Request<Vec<u8>>, ManagerUriSchemeResponder)
-    + Send
+type ManagerUriSchemeHandler = dyn for<'a> Fn(
+        ManagerUriSchemeContext<'a>,
+        http::Request<Vec<u8>>,
+        ManagerUriSchemeResponder,
+    ) + Send
     + Sync
     + 'static;
 
@@ -117,11 +120,13 @@ pub struct WebContext {
 }
 
 pub type WebContextStore = Arc<Mutex<HashMap<Option<PathBuf>, WebContext>>>;
-pub type WebviewIpcHandler = Box<dyn Fn(WebViewMetaData, Request<String>) + Send>;
+pub type WebviewIpcHandler =
+    Box<dyn Fn(WebViewMetaData, Request<String>) + Send>;
 
 pub type WebviewEventId = u32;
 pub type WebviewEventHandler = Box<dyn Fn(&WebviewEvent) + Send>;
-pub type WebviewEventListeners = Arc<Mutex<HashMap<WebviewEventId, WebviewEventHandler>>>;
+pub type WebviewEventListeners =
+    Arc<Mutex<HashMap<WebviewEventId, WebviewEventHandler>>>;
 #[cfg(target_os = "android")]
 pub struct CreationContext<'a, 'b> {
     pub env: &'a mut jni::JNIEnv<'b>,
@@ -131,18 +136,24 @@ pub struct CreationContext<'a, 'b> {
 
 pub type IpcHandler = dyn Fn(Request<String>) + 'static;
 
-pub type UriSchemeProtocolHandler = dyn Fn(&str, http::Request<Vec<u8>>, Box<dyn FnOnce(http::Response<Cow<'static, [u8]>>) + Send>)
-    + Send
+pub type UriSchemeProtocolHandler = dyn Fn(
+        &str,
+        http::Request<Vec<u8>>,
+        Box<dyn FnOnce(http::Response<Cow<'static, [u8]>>) + Send>,
+    ) + Send
     + Sync
     + 'static;
 
-pub type ProxyHandler = Arc<dyn Fn(WindowId, WebviewId, SynthesizedEvent) + Send + Sync + 'static>;
-pub type WebResourceRequestHandler =
-    dyn Fn(http::Request<Vec<u8>>, &mut http::Response<Cow<'static, [u8]>>) + Send + Sync;
+pub type ProxyHandler =
+    Arc<dyn Fn(WindowId, WebviewId, SynthesizedEvent) + Send + Sync + 'static>;
+pub type WebResourceRequestHandler = dyn Fn(http::Request<Vec<u8>>, &mut http::Response<Cow<'static, [u8]>>)
+    + Send
+    + Sync;
 
 pub type NavigationHandler = dyn Fn(&Url) -> bool + Send;
 
-pub type NewWindowHandler = dyn Fn(Url, NewWindowFeatures) -> NewWindowResponse + Send;
+pub type NewWindowHandler =
+    dyn Fn(Url, NewWindowFeatures) -> NewWindowResponse + Send;
 
 pub type OnPageLoadHandler = dyn Fn(Url, PageLoadEvent) + Send;
 
@@ -153,7 +164,9 @@ pub type DownloadHandler = dyn Fn(DownloadEvent) -> bool + Send + Sync;
 pub type OnWebContentProcessTerminateHandler = dyn Fn() + Send;
 
 #[cfg(target_os = "ios")]
-pub type InputAccessoryViewBuilderFn = dyn Fn(&objc2_ui_kit::UIView) -> Option<objc2::rc::Retained<objc2_ui_kit::UIView>>
+pub type InputAccessoryViewBuilderFn = dyn Fn(
+        &objc2_ui_kit::UIView,
+    ) -> Option<objc2::rc::Retained<objc2_ui_kit::UIView>>
     + Send
     + Sync
     + 'static;
@@ -178,7 +191,8 @@ pub struct NewWindowOpener {
     #[cfg(windows)]
     pub webview: webview2_com::Microsoft::Web::WebView2::Win32::ICoreWebView2,
     #[cfg(windows)]
-    pub environment: webview2_com::Microsoft::Web::WebView2::Win32::ICoreWebView2Environment,
+    pub environment:
+        webview2_com::Microsoft::Web::WebView2::Win32::ICoreWebView2Environment,
     /// The instance of the webview that initiated the new window request.
     #[cfg(target_os = "macos")]
     pub webview: objc2::rc::Retained<objc2_web_kit::WKWebView>,
@@ -186,7 +200,8 @@ pub struct NewWindowOpener {
     ///
     /// This **MUST** be used when creating the target webview. See [`WebviewAttributes::webview_configuration`].
     #[cfg(target_os = "macos")]
-    pub target_configuration: objc2::rc::Retained<objc2_web_kit::WKWebViewConfiguration>,
+    pub target_configuration:
+        objc2::rc::Retained<objc2_web_kit::WKWebViewConfiguration>,
 }
 
 /// Window features of a window requested to open.
@@ -366,7 +381,10 @@ impl MimeType {
     }
 
     /// parse a URI suffix to convert text/plain mimeType to their actual web compatible mimeType with specified fallback for unknown file extensions.
-    pub fn parse_from_uri_with_fallback(uri: &str, fallback: MimeType) -> MimeType {
+    pub fn parse_from_uri_with_fallback(
+        uri: &str,
+        fallback: MimeType,
+    ) -> MimeType {
         let suffix = uri.split('.').next_back();
         match suffix {
             Some("bin") => Self::OctetStream,
@@ -395,7 +413,11 @@ impl MimeType {
         Self::parse_with_fallback(content, uri, Self::Html)
     }
     /// infer mimetype from content (or) URI if needed with specified fallback for unknown file extensions.
-    pub fn parse_with_fallback(content: &[u8], uri: &str, fallback: MimeType) -> String {
+    pub fn parse_with_fallback(
+        content: &[u8],
+        uri: &str,
+        fallback: MimeType,
+    ) -> String {
         let mime = if uri.ends_with(".svg") {
             // when reading svg, we can't use `infer`
             None
@@ -407,7 +429,9 @@ impl MimeType {
             Some(mime) if mime == MIMETYPE_PLAIN => {
                 Self::parse_from_uri_with_fallback(uri, fallback).to_string()
             }
-            None => Self::parse_from_uri_with_fallback(uri, fallback).to_string(),
+            None => {
+                Self::parse_from_uri_with_fallback(uri, fallback).to_string()
+            }
             Some(mime) => mime.to_string(),
         }
     }
