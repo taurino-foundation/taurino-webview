@@ -15,14 +15,14 @@ fn main() -> Result<()> {
     // To test this example, comment out the external URL example below
     // and enable this line:
     //
-    // local_html_example()
+    local_html_example()
 
     // Example 2: external websites.
     // To test this example, keep this line enabled:
-    external_url_example()
+    /* external_url_example() */
 }
 
-/*
+
 fn local_html_example() -> Result<()> {
     let event_loop = EventLoop::new();
 
@@ -47,27 +47,18 @@ fn local_html_example() -> Result<()> {
     let scale_factor = window.scale_factor();
     let window_size = window.inner_size().to_logical::<f32>(scale_factor);
 
-    let half_width = window_size.width / 2.0;
-    let half_height = window_size.height / 2.0;
+    let layout = FixedLayout::Grid { rows: 2, cols: 2 };
 
-    let layouts = [
-        // Top left
-        (0.0, 0.0, half_width, half_height),
+    let bounds = layout.resolve(
+        pages.len(),
+        window_size.width,
+        window_size.height,
+    );
 
-        // Top right
-        (half_width, 0.0, half_width, half_height),
-
-        // Bottom left
-        (0.0, half_height, half_width, half_height),
-
-        // Bottom right
-        (half_width, half_height, half_width, half_height),
-    ];
-
-    for ((label, page), (x, y, width, height)) in pages.into_iter().zip(layouts) {
+    for ((label, page), bounds) in pages.into_iter().zip(bounds.into_iter()) {
         let pending = WebViewBuilder::app(label, page)
-            .auto_resize()
-            .bounds(x, y, width, height)
+            .bounds_rect(bounds)
+            .devtools(true)
             .build();
 
         manager.create_webview(&window, pending)?;
@@ -78,10 +69,10 @@ fn local_html_example() -> Result<()> {
 
         match event {
             Event::WindowEvent {
-                event: WindowEvent::Resized(size),
+                event: WindowEvent::Resized(_),
                 ..
             } => {
-                manager.resize_webviews(&window, size);
+                manager.resize_webviews_with_layout(&window, &layout);
             }
 
             Event::WindowEvent {
@@ -95,7 +86,8 @@ fn local_html_example() -> Result<()> {
         }
     })
 }
-*/
+
+/* 
 
 fn external_url_example() -> Result<()> {
     let event_loop = EventLoop::new();
@@ -129,6 +121,7 @@ fn external_url_example() -> Result<()> {
     for ((label, url), bounds) in urls.into_iter().zip(bounds.into_iter()) {
         let pending = WebViewBuilder::external(label, url)?
             .bounds_rect(bounds)
+            .devtools(true)
             .build();
 
         manager.create_webview(&window, pending)?;
@@ -155,3 +148,4 @@ fn external_url_example() -> Result<()> {
         }
     })
 }
+ */
