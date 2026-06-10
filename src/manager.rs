@@ -19,6 +19,7 @@ use crate::{
     layout::FixedLayout,
     pending::PendingWebview,
     protocol,
+    protocol::pattern::{Pattern, PatternJavascript},
     types::{FrontendDist, WebviewUrl},
     utils::{
         ManagerUriSchemeContext, ManagerUriSchemeProtocol,
@@ -49,84 +50,264 @@ pub(crate) struct IpcJavascript<'a> {
     pub(crate) isolation_origin: &'a str,
 }
 
+/// Runtime configuration for the webview manager.
+///
+/// This configuration controls how webviews are initialized, which frontend
+/// source is used, whether isolation is enabled, and which JavaScript runtime
+/// bootstrap scripts are injected into each webview.
+///
+/// The configuration is designed to be Python-friendly:
+/// Python can decide whether isolation should be enabled and can provide
+/// isolation assets as raw bytes at runtime.
 pub struct ManagerConfig {
+    /// Enables or disables the isolation runtime.
+    ///
+    /// This is an explicit runtime option. It decides whether isolation-related
+    /// JavaScript and protocols should be installed.
+    ///
+    /// Important:
+    /// `Pattern::Isolation` stores the isolation data, but this flag decides
+    /// whether that data is actually used.
+    isolation_enabled: bool,
+
+    /// Enables prototype freezing in the injected JavaScript runtime.
+    ///
+    /// When enabled, the runtime may inject JavaScript that freezes selected
+    /// prototypes to reduce prototype-pollution risks.
     freeze_prototype: bool,
-    pattern: bool,
 
-    pub webview_runtime_installed: bool,
-    /// The script that initializes the invoke system.
-    pub invoke_initialization_script: String,
+    /// The current application pattern.
+    ///
+    /// `Pattern::Brownfield` represents the normal application mode.
+    /// `Pattern::Isolation` contains the runtime isolation assets and metadata.
+    ///
+    /// The pattern alone does not activate isolation. Isolation is active only
+    /// when `isolation_enabled == true` and this field is `Pattern::Isolation`.
+    pattern: Arc<Pattern>,
 
-    /// A runtime generated invoke key.
+    /// Indicates whether a native webview runtime is available on the system.
+    ///
+    /// This is detected by checking `wry::webview_version()`.
+    webview_runtime_installed: bool,
+
+    /// JavaScript used to initialize the invoke system.
+    ///
+    /// This script is injected into the webview as part of the runtime bootstrap.
+    invoke_initialization_script: String,
+
+    /// Runtime-generated invoke key.
+    ///
+    /// This key can be used to protect internal invoke calls.
     pub(crate) invoke_key: String,
-    /// Custom protocols to register on the webview.
+
+    /// Defines where the frontend is loaded from.
+    ///
+    /// This can be a development server URL, a static directory, a list of files,
+    /// or `None`, in which case the internal application protocol is used.
     frontend_dist: Option<FrontendDist>,
-    pub web_context: WebContextStore,
+
+    /// Shared web context storage.
+    ///
+    /// This is used to manage persistent webview context data.
+    web_context: WebContextStore,
 }
+
 impl ManagerConfig {
+    /// Creates a new manager configuration using default values.
     pub fn new() -> crate::Result<Self> {
         Ok(Self::default())
     }
 
     // ---------------------------------------------------------------------
-    // Getter
+    // State checks
     // ---------------------------------------------------------------------
 
+    /// Returns whether isolation was explicitly enabled in the configuration.
+    ///
+    /// This only reflects the option value. It does not guarantee that a valid
+    /// `Pattern::Isolation` is currently configured.
+    pub fn is_isolation_enabled(&self) -> bool {
+        self.isolation_enabled
+    }
+
+    /// Returns whether isolation is fully active.
+    ///
+    /// Isolation is active only when:
+    ///
+    /// - the isolation option is enabled
+    /// - the configured pattern is `Pattern::Isolation`
+    ///
+    /// Use this method before injecting isolation JavaScript or registering the
+    /// isolation protocol.
+    pub fn is_isolation_active(&self) -> bool {
+        self.isolation_enabled
+            && matches!(self.pattern.as_ref(), Pattern::Isolation { .. })
+    }
+
+    /// Returns whether prototype freezing is enabled.
     pub fn freeze_prototype(&self) -> bool {
         self.freeze_prototype
     }
 
-    pub fn pattern(&self) -> bool {
-        self.pattern
-    }
-
+    /// Returns whether the system webview runtime is installed.
     pub fn webview_runtime_installed(&self) -> bool {
         self.webview_runtime_installed
     }
 
+    // ---------------------------------------------------------------------
+    // Accessors
+    // ---------------------------------------------------------------------
+
+    /// Returns a cloned reference-counted handle to the current pattern.
+    pub fn pattern(&self) -> Arc<Pattern> {
+        Arc::clone(&self.pattern)
+    }
+
+    /// Returns a borrowed reference to the current pattern.
+    ///
+    /// Prefer this method when cloning the `Arc` is not required.
+    pub fn pattern_ref(&self) -> &Pattern {
+        self.pattern.as_ref()
+    }
+
+    /// Returns the invoke initialization script.
     pub fn invoke_initialization_script(&self) -> &str {
         &self.invoke_initialization_script
     }
-    #[allow(dead_code)]
+
+    /// Returns the runtime invoke key.
     pub(crate) fn invoke_key(&self) -> &str {
         &self.invoke_key
     }
 
+    /// Returns the configured frontend distribution source.
     pub fn frontend_dist(&self) -> Option<&FrontendDist> {
         self.frontend_dist.as_ref()
     }
 
+    /// Returns the configured frontend resource path.
+    ///
+    /// This is an internal alias used by the protocol layer.
     pub(crate) fn resource_path(&self) -> Option<&FrontendDist> {
         self.frontend_dist.as_ref()
     }
 
+    /// Returns the shared web context store.
     pub(crate) fn web_context(&self) -> &WebContextStore {
         &self.web_context
     }
 
     // ---------------------------------------------------------------------
-    // Builder-Setter
+    // Pattern and isolation configuration
     // ---------------------------------------------------------------------
 
-    #[allow(dead_code)]
+    /// Enables or disables the isolation option.
+    ///
+    /// Disabling isolation also resets the pattern to `Pattern::Brownfield`
+    /// to avoid stale isolation assets being used accidentally.
+    ///
+    /// Enabling isolation does not create isolation assets automatically.
+    /// Use `set_isolation_html` or `set_isolation_assets` for that.
+    #[must_use]
+    pub fn set_isolation_enabled(mut self, enabled: bool) -> Self {
+        self.isolation_enabled = enabled;
+
+        if !enabled {
+            self.pattern = Arc::new(Pattern::Brownfield);
+        }
+
+        self
+    }
+
+    /// Configures the manager for normal Brownfield mode.
+    ///
+    /// This disables isolation and resets the pattern to `Pattern::Brownfield`.
+    #[must_use]
+    pub fn set_brownfield(mut self) -> Self {
+        self.isolation_enabled = false;
+        self.pattern = Arc::new(Pattern::Brownfield);
+        self
+    }
+
+    /// Sets the raw application pattern without changing the isolation option.
+    ///
+    /// This is useful for advanced internal use cases.
+    ///
+    /// For Python-facing APIs, prefer `set_brownfield`, `set_isolation_html`,
+    /// or `set_isolation_assets`, because those methods keep the option state
+    /// and the pattern state consistent.
+    #[must_use]
+    pub fn set_pattern(mut self, pattern: Arc<Pattern>) -> Self {
+        self.pattern = pattern;
+        self
+    }
+
+    /// Enables isolation and creates an isolation pattern from a single HTML file.
+    ///
+    /// This is the recommended Python-facing entry point for simple isolation
+    /// setups where Python provides the isolation page as raw bytes.
+    ///
+    /// Python example:
+    ///
+    /// ```python
+    /// config.set_isolation_html(b"<html>...</html>")
+    /// ```
+    #[must_use]
+    pub fn set_isolation_html<B>(mut self, html: B) -> Self
+    where
+        B: Into<Vec<u8>>,
+    {
+        self.isolation_enabled = true;
+        self.pattern = Arc::new(Pattern::isolation_from_html(html));
+        self
+    }
+
+    /// Enables isolation and creates an isolation pattern from multiple assets.
+    ///
+    /// The asset map uses normalized web paths as keys and raw file contents
+    /// as values.
+    ///
+    /// Python example:
+    ///
+    /// ```python
+    /// config.set_isolation_assets({
+    ///     "index.html": b"<html></html>",
+    ///     "main.js": b"console.log('hello')",
+    ///     "style.css": b"body { margin: 0 }",
+    /// })
+    /// ```
+    #[must_use]
+    pub fn set_isolation_assets(
+        mut self,
+        assets: HashMap<String, Vec<u8>>,
+    ) -> Self {
+        self.isolation_enabled = true;
+        self.pattern = Arc::new(Pattern::isolation_from_bytes_map(assets));
+        self
+    }
+
+    // ---------------------------------------------------------------------
+    // Runtime configuration
+    // ---------------------------------------------------------------------
+
+    /// Enables or disables prototype freezing.
+    #[must_use]
     pub fn set_freeze_prototype(mut self, value: bool) -> Self {
         self.freeze_prototype = value;
         self
     }
 
-    #[allow(dead_code)]
-    pub fn set_pattern(mut self, value: bool) -> Self {
-        self.pattern = value;
-        self
-    }
-
-    #[allow(dead_code)]
+    /// Overrides whether the webview runtime is considered installed.
+    ///
+    /// This is mostly useful for tests or custom runtime checks.
+    #[must_use]
     pub fn set_webview_runtime_installed(mut self, value: bool) -> Self {
         self.webview_runtime_installed = value;
         self
     }
 
-    #[allow(dead_code)]
+    /// Sets the JavaScript used to initialize the invoke system.
+    #[must_use]
     pub fn set_invoke_initialization_script<S>(mut self, script: S) -> Self
     where
         S: Into<String>,
@@ -135,7 +316,7 @@ impl ManagerConfig {
         self
     }
 
-    #[allow(dead_code)]
+    /// Sets the runtime invoke key.
     pub(crate) fn set_invoke_key<S>(mut self, key: S) -> Self
     where
         S: Into<String>,
@@ -144,35 +325,46 @@ impl ManagerConfig {
         self
     }
 
-    #[allow(dead_code)]
+    /// Sets the shared web context store.
+    #[must_use]
     pub fn set_web_context(mut self, web_context: WebContextStore) -> Self {
         self.web_context = web_context;
         self
     }
 
-    #[allow(dead_code)]
+    // ---------------------------------------------------------------------
+    // Frontend source configuration
+    // ---------------------------------------------------------------------
+
+    /// Sets the frontend distribution source.
+    #[must_use]
     pub fn set_frontend_dist(mut self, frontend_dist: FrontendDist) -> Self {
         self.frontend_dist = Some(frontend_dist);
         self
     }
 
-    #[allow(dead_code)]
+    /// Clears the frontend distribution source.
+    ///
+    /// When no frontend distribution is configured, the manager falls back to
+    /// the internal application protocol.
+    #[must_use]
     pub fn clear_frontend_dist(mut self) -> Self {
         self.frontend_dist = None;
         self
     }
 
-    // ---------------------------------------------------------------------
-    // Convenience-Setter für FrontendDist
-    // ---------------------------------------------------------------------
-
+    /// Configures a development server URL as the frontend source.
+    ///
+    /// This is useful during development when the frontend is served by tools
+    /// such as Vite, Next.js, Vue CLI, or another local web server.
     pub fn with_dev_server_url(mut self, url: &str) -> crate::Result<Self> {
         let url = Url::parse(url).map_err(crate::Error::InvalidUrl)?;
         self.frontend_dist = Some(FrontendDist::Url(url));
         Ok(self)
     }
 
-    #[allow(dead_code)]
+    /// Configures a static directory as the frontend source.
+    #[must_use]
     pub fn set_static_dir<P>(mut self, path: P) -> Self
     where
         P: Into<PathBuf>,
@@ -181,7 +373,8 @@ impl ManagerConfig {
         self
     }
 
-    #[allow(dead_code)]
+    /// Configures a list of static frontend files as the frontend source.
+    #[must_use]
     pub fn set_static_files(mut self, files: Vec<PathBuf>) -> Self {
         self.frontend_dist = Some(FrontendDist::Files(files));
         self
@@ -191,13 +384,14 @@ impl ManagerConfig {
 impl Default for ManagerConfig {
     fn default() -> Self {
         Self {
+            isolation_enabled: false,
             freeze_prototype: false,
-            pattern: false,
+            pattern: Arc::new(Pattern::Brownfield),
             webview_runtime_installed: wry::webview_version().is_ok(),
-            invoke_initialization_script: Default::default(),
-            invoke_key: Default::default(),
+            invoke_initialization_script: String::new(),
+            invoke_key: String::new(),
             frontend_dist: None,
-            web_context: Default::default(),
+            web_context: WebContextStore::default(),
         }
     }
 }
@@ -319,57 +513,70 @@ impl Manager {
         &mut self,
         mut pending: PendingWebview,
     ) -> crate::Result<PendingWebview> {
+        // Ensure that each webview label is unique within this manager.
         if self.webviews_lock().contains_key(&pending.label) {
             return Err(crate::Error::WebviewLabelAlreadyExists(pending.label));
         }
 
         let label = pending.label.clone();
+        let use_https_scheme = pending.webview_attributes.use_https_scheme;
 
+        // Resolve the final URL that should be loaded by the webview.
+        //
+        // App URLs are resolved against the configured frontend source.
+        // External URLs are preserved unless they point to the local app server,
+        // in which case they are mapped to the internal application protocol.
         let mut url = match &pending.webview_attributes.url {
             WebviewUrl::App(path) => {
-                let app_url = self
-                    .get_app_url(pending.webview_attributes.use_https_scheme);
+                let app_url = self.get_app_url(use_https_scheme);
 
-                let url = if is_local_network_url(&app_url) {
+                let base_url = if is_local_network_url(&app_url) {
                     Cow::Owned(
                         Url::parse("taurino://localhost")
-                            .expect("invalid app URL"),
+                            .expect("invalid internal application URL"),
                     )
                 } else {
                     app_url
                 };
 
-                // Ignore `index.html` just to simplify the URL.
-                if path.to_str() != Some("index.html") {
-                    url.join(&path.to_string_lossy())
+                // Keep the base URL clean when the requested path is `index.html`.
+                if path.to_str() == Some("index.html") {
+                    base_url.into_owned()
+                } else {
+                    base_url
+                        .join(&path.to_string_lossy())
                         .map_err(crate::Error::InvalidUrl)?
-                } else {
-                    url.into_owned()
                 }
             }
-            WebviewUrl::External(url) => {
-                let config_url = self
-                    .get_app_url(pending.webview_attributes.use_https_scheme);
-                let is_app_url = config_url.make_relative(url).is_some();
-                let url = url.clone();
 
-                if is_app_url && is_local_network_url(&url) {
-                    Url::parse("taurino://localhost").expect("invalid app URL")
+            WebviewUrl::External(url) => {
+                let app_url = self.get_app_url(use_https_scheme);
+                let is_app_url = app_url.make_relative(url).is_some();
+
+                if is_app_url && is_local_network_url(url) {
+                    Url::parse("taurino://localhost")
+                        .expect("invalid internal application URL")
                 } else {
-                    url
+                    url.clone()
                 }
             }
+
             WebviewUrl::CustomProtocol(url) => url.clone(),
+
             #[allow(unreachable_patterns)]
             _ => unimplemented!(),
         };
 
+        // Normalize inline HTML data URLs.
+        //
+        // This keeps data URLs usable when the decoded body is HTML.
+        // The check is intentionally conservative and only rewrites URLs that
+        // look like HTML documents.
         if url.scheme() == "data" {
             if let Ok(data_url) = data_url::DataUrl::process(url.as_str()) {
                 if let Ok((body, _)) = data_url.decode_to_vec() {
                     let html = String::from_utf8_lossy(&body).into_owned();
 
-                    // Naive way to check if it is HTML.
                     if html.contains('<') && html.contains('>') {
                         url.set_path(&format!(",{html}"));
                     }
@@ -381,13 +588,13 @@ impl Manager {
 
         self.prepare_pending_webview(pending, &label)
     }
-
     fn prepare_pending_webview(
         &mut self,
         mut pending: PendingWebview,
         label: &str,
     ) -> crate::Result<PendingWebview> {
         let use_https_scheme = pending.webview_attributes.use_https_scheme;
+        let isolation_active = self.config.is_isolation_active();
 
         let mut all_initialization_scripts: Vec<InitializationScript> =
             Vec::new();
@@ -399,52 +606,129 @@ impl Manager {
             }
         }
 
+        // ---------------------------------------------------------------------
+        // Base runtime bootstrap
+        // ---------------------------------------------------------------------
+
+        // This script is always injected. It creates the global runtime namespace
+        // used by the framework and plugins.
         all_initialization_scripts.push(main_frame_script(
             r#"
-            Object.defineProperty(window, 'isTaurino', {
-                value: true,
-            });
+        Object.defineProperty(window, 'isTaurino', {
+            value: true,
+        });
 
-            if (!window.__TAURINO_INTERNALS__) {
-                Object.defineProperty(window, '__TAURINO_INTERNALS__', {
-                    value: {
-                        plugins: {}
-                    }
-                });
-            }
-            "#
+        if (!window.__TAURINO_INTERNALS__) {
+            Object.defineProperty(window, '__TAURINO_INTERNALS__', {
+                value: {
+                    plugins: {}
+                }
+            });
+        }
+        "#
             .to_owned(),
         ));
 
+        // Inject metadata about the current window and webview.
         all_initialization_scripts.push(main_frame_script(format!(
             r#"
-            Object.defineProperty(window.__TAURINO_INTERNALS__, 'metadata', {{
-                value: {{
-                    currentWindow: {{ label: {current_window_label} }},
-                    currentWebview: {{ label: {current_webview_label} }}
-                }}
-            }});
-            "#,
+        Object.defineProperty(window.__TAURINO_INTERNALS__, 'metadata', {{
+            value: {{
+                currentWindow: {{ label: {current_window_label} }},
+                currentWebview: {{ label: {current_webview_label} }}
+            }}
+        }});
+        "#,
             current_window_label =
                 serde_json::to_string(self.window_label.as_ref())?,
             current_webview_label = serde_json::to_string(label)?,
         )));
 
-        let ipc_script = "";
-        let pattern_script = "";
+        // ---------------------------------------------------------------------
+        // Optional isolation runtime scripts
+        // ---------------------------------------------------------------------
 
+        // Pattern JavaScript is only generated when isolation is actually active.
+        //
+        // This keeps Brownfield mode clean and avoids injecting unused isolation
+        // configuration into normal webviews.
+        let pattern_script = if isolation_active {
+            PatternJavascript {
+                pattern: self.config.pattern_ref().into(),
+            }
+            .render_default(&Default::default())?
+            .into_string()
+        } else {
+            String::new()
+        };
+
+        // IPC JavaScript receives the isolation origin only when isolation is active.
+        let ipc_script = if isolation_active {
+            let isolation_origin = match self.config.pattern_ref() {
+                Pattern::Isolation { schema, .. } => {
+                    crate::protocol::pattern::format_real_schema(
+                        schema,
+                        use_https_scheme,
+                    )
+                }
+                Pattern::Brownfield => String::new(),
+            };
+
+            IpcJavascript {
+                isolation_origin: &isolation_origin,
+            }
+            .render_default(&Default::default())?
+            .into_string()
+        } else {
+            String::new()
+        };
+
+        // Inject the main runtime initialization script.
+        //
+        // In Brownfield mode, `pattern_script` and `ipc_script` are empty.
+        // In Isolation mode, they contain the required isolation runtime setup.
         all_initialization_scripts.push(main_frame_script(
             self.initialization_script(
-                ipc_script,
-                pattern_script,
+                &ipc_script,
+                &pattern_script,
                 use_https_scheme,
             )?,
         ));
 
-        pending
-            .webview_attributes
-            .initialization_scripts
-            .extend(all_initialization_scripts);
+        // Inject the isolation iframe bootstrap only when isolation is active.
+        if isolation_active {
+            if let Pattern::Isolation { schema, .. } = self.config.pattern_ref()
+            {
+                let isolation_src =
+                    crate::protocol::pattern::format_real_schema(
+                        schema,
+                        use_https_scheme,
+                    );
+
+                all_initialization_scripts.push(main_frame_script(
+                IsolationJavascript {
+                    isolation_src: &isolation_src,
+                    style: "position: fixed; top: 0; left: 0; width: 100%; height: 100%; border: 0;",
+                }
+                .render_default(&Default::default())?
+                .into_string(),
+            ));
+            }
+        }
+
+        // ---------------------------------------------------------------------
+        // Prepend framework scripts before user-defined scripts
+        // ---------------------------------------------------------------------
+        // Prepend `all_initialization_scripts` to `webview_attributes.initialization_scripts`
+        all_initialization_scripts
+            .extend(pending.webview_attributes.initialization_scripts);
+        pending.webview_attributes.initialization_scripts =
+            all_initialization_scripts;
+
+        pending.webview_attributes = pending.webview_attributes;
+        // ---------------------------------------------------------------------
+        // Register custom protocols
+        // ---------------------------------------------------------------------
 
         let protocols = self.registered_uri_scheme_protocols();
         let mut registered_scheme_protocols = HashSet::new();
@@ -471,14 +755,20 @@ impl Manager {
             );
         }
 
+        // ---------------------------------------------------------------------
+        // Register built-in protocols
+        // ---------------------------------------------------------------------
+
         let window_url =
             Url::parse(&pending.url).map_err(crate::Error::InvalidUrl)?;
+
         let window_origin = Self::window_origin(&window_url, use_https_scheme);
 
         self.register_builtin_protocols(
             &mut pending,
             &mut registered_scheme_protocols,
             window_origin,
+            use_https_scheme,
         );
 
         Ok(pending)
@@ -500,15 +790,17 @@ impl Manager {
         pending: &mut PendingWebview,
         registered_scheme_protocols: &mut HashSet<String>,
         window_origin: String,
+        use_https_scheme: bool,
     ) {
         if !registered_scheme_protocols.contains(APP_PROTOCOL) {
             let _web_resource_request_handler =
                 pending.web_resource_request_handler.take();
 
-            let app_protocol = protocol::get(
+            let app_protocol = protocol::taurino::get(
                 self.config.resource_path().cloned(),
                 &window_origin,
             );
+
             let window_label = Arc::clone(&self.window_label);
 
             pending.internal_register_uri_scheme_protocol(
@@ -539,6 +831,38 @@ impl Manager {
             );
 
             registered_scheme_protocols.insert(IPC_PROTOCOL.to_string());
+        }
+
+        if self.config.is_isolation_active() {
+            if let Pattern::Isolation {
+                assets,
+                schema,
+                key: _,
+                crypto_keys: _,
+            } = self.config.pattern_ref()
+            {
+                if !registered_scheme_protocols.contains(schema) {
+                    let protocol = crate::protocol::isolation::get(
+                        schema.clone(),
+                        Arc::clone(assets),
+                        window_origin.clone(),
+                        use_https_scheme,
+                    );
+
+                    pending.internal_register_uri_scheme_protocol(
+                        schema.clone(),
+                        move |webview_id, request, responder| {
+                            protocol.handle(
+                                webview_id,
+                                request,
+                                ManagerUriSchemeResponder(responder),
+                            );
+                        },
+                    );
+
+                    registered_scheme_protocols.insert(schema.clone());
+                }
+            }
         }
     }
 

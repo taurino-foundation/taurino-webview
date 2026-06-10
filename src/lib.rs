@@ -4,9 +4,8 @@ pub mod builder;
 pub mod error;
 pub mod events;
 pub mod factory;
-pub mod manager;
-/* pub mod pattern; */
 pub mod layout;
+pub mod manager;
 pub mod pending;
 pub mod platform;
 pub(crate) mod protocol;
