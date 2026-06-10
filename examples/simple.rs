@@ -138,10 +138,10 @@ fn external_url_example() -> Result<()> {
 
         match event {
             Event::WindowEvent {
-                event: WindowEvent::Resized(size),
+                event: WindowEvent::Resized(_),
                 ..
             } => {
-                manager.resize_webviews(&window, size);
+                manager.resize_webviews_with_layout(&window, &layout);
             }
 
             Event::WindowEvent {
