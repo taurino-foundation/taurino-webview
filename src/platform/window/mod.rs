@@ -54,9 +54,7 @@ pub fn calculate_window_center_position(
     let work_area = target_monitor.work_area();
 
     tao::dpi::PhysicalPosition::new(
-        (work_area.size.width as i32 - window_size.width as i32) / 2
-            + work_area.position.x,
-        (work_area.size.height as i32 - window_size.height as i32) / 2
-            + work_area.position.y,
+        (work_area.size.width as i32 - window_size.width as i32) / 2 + work_area.position.x,
+        (work_area.size.height as i32 - window_size.height as i32) / 2 + work_area.position.y,
     )
 }

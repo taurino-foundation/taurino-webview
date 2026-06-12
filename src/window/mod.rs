@@ -10,14 +10,13 @@ use crate::{
         error::Error,
         to_tao_theme,
         types::{
-            CursorIcon, Icon, Monitor, ProgressBarState, ResizeDirection,
-            WindowSizeConstraints,
+            CursorIcon, Icon, Monitor, ProgressBarState, ResizeDirection, WindowSizeConstraints,
         },
     },
     window::wrapper::{
-        CursorIconWrapper, MonitorHandleWrapper, PhysicalPositionWrapper,
-        PhysicalSizeWrapper, PositionWrapper, ProgressBarStateWrapper,
-        SizeWrapper, TaoIcon, UserAttentionTypeWrapper, map_theme,
+        CursorIconWrapper, MonitorHandleWrapper, PhysicalPositionWrapper, PhysicalSizeWrapper,
+        PositionWrapper, ProgressBarStateWrapper, SizeWrapper, TaoIcon, UserAttentionTypeWrapper,
+        map_theme,
     },
 };
 use dpi::{PhysicalPosition, PhysicalSize, Position, Size};
@@ -90,9 +89,7 @@ impl fmt::Debug for Window {
 
 impl HasWindowHandle for Window {
     /// Returns the raw window handle exposed by the underlying Tao window.
-    fn window_handle(
-        &self,
-    ) -> std::result::Result<WindowHandle<'_>, HandleError> {
+    fn window_handle(&self) -> std::result::Result<WindowHandle<'_>, HandleError> {
         self.inner.window_handle()
     }
 }
@@ -119,10 +116,7 @@ impl Window {
     /// Pass `Some(label)` to store the focused webview label, or `None` to
     /// clear the current focus state. If the internal mutex is poisoned, the
     /// value is left unchanged and the method still returns successfully.
-    pub fn set_focused_webview(
-        &self,
-        focused_webview: Option<String>,
-    ) -> Result<()> {
+    pub fn set_focused_webview(&self, focused_webview: Option<String>) -> Result<()> {
         if let Ok(mut current_focused_webview) = self.focused_webview.lock() {
             *current_focused_webview = focused_webview;
         }
@@ -283,11 +277,7 @@ impl Window {
     }
 
     /// Returns the monitor that contains the provided physical point.
-    pub fn monitor_from_point(
-        &self,
-        x: f64,
-        y: f64,
-    ) -> Result<Option<Monitor>> {
+    pub fn monitor_from_point(&self, x: f64, y: f64) -> Result<Option<Monitor>> {
         Ok(self
             .inner
             .monitor_from_point(x, y)
@@ -578,10 +568,7 @@ impl Window {
     ///
     /// - **Linux / macOS:** Progress is app-wide and requires a supported desktop environment.
     /// - **iOS / Android:** Unsupported.
-    pub fn set_progress_bar(
-        &self,
-        progress_state: ProgressBarState,
-    ) -> Result<()> {
+    pub fn set_progress_bar(&self, progress_state: ProgressBarState) -> Result<()> {
         Ok(self
             .inner
             .set_progress_bar(ProgressBarStateWrapper::from(progress_state).0))
@@ -603,18 +590,14 @@ impl Window {
     }
 
     /// Sets the minimum and maximum inner size constraints.
-    pub fn set_size_constraints(
-        &self,
-        constraints: WindowSizeConstraints,
-    ) -> Result<()> {
-        self.inner.set_inner_size_constraints(
-            tao::window::WindowSizeConstraints {
+    pub fn set_size_constraints(&self, constraints: WindowSizeConstraints) -> Result<()> {
+        self.inner
+            .set_inner_size_constraints(tao::window::WindowSizeConstraints {
                 min_width: constraints.min_width,
                 min_height: constraints.min_height,
                 max_width: constraints.max_width,
                 max_height: constraints.max_height,
-            },
-        );
+            });
 
         Ok(())
     }
@@ -702,10 +685,7 @@ impl Window {
     }
 
     /// Controls whether the window is visible on all workspaces.
-    pub fn set_visible_on_all_workspaces(
-        &self,
-        visible_on_all_workspaces: bool,
-    ) -> Result<()> {
+    pub fn set_visible_on_all_workspaces(&self, visible_on_all_workspaces: bool) -> Result<()> {
         Ok(self
             .inner
             .set_visible_on_all_workspaces(visible_on_all_workspaces))
@@ -722,26 +702,15 @@ impl Window {
     }
 
     /// Starts an interactive resize operation in the provided direction.
-    pub fn start_resize_dragging(
-        &self,
-        direction: ResizeDirection,
-    ) -> Result<()> {
+    pub fn start_resize_dragging(&self, direction: ResizeDirection) -> Result<()> {
         let direction = match direction {
             ResizeDirection::East => tao::window::ResizeDirection::East,
             ResizeDirection::North => tao::window::ResizeDirection::North,
-            ResizeDirection::NorthEast => {
-                tao::window::ResizeDirection::NorthEast
-            }
-            ResizeDirection::NorthWest => {
-                tao::window::ResizeDirection::NorthWest
-            }
+            ResizeDirection::NorthEast => tao::window::ResizeDirection::NorthEast,
+            ResizeDirection::NorthWest => tao::window::ResizeDirection::NorthWest,
             ResizeDirection::South => tao::window::ResizeDirection::South,
-            ResizeDirection::SouthEast => {
-                tao::window::ResizeDirection::SouthEast
-            }
-            ResizeDirection::SouthWest => {
-                tao::window::ResizeDirection::SouthWest
-            }
+            ResizeDirection::SouthEast => tao::window::ResizeDirection::SouthEast,
+            ResizeDirection::SouthWest => tao::window::ResizeDirection::SouthWest,
             ResizeDirection::West => tao::window::ResizeDirection::West,
         };
 

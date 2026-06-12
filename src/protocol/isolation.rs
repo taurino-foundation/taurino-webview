@@ -5,9 +5,7 @@ use http::{
     header::{CONTENT_SECURITY_POLICY, CONTENT_TYPE},
 };
 
-use crate::{
-    protocol::pattern::RuntimeAssets, utils::ManagerUriSchemeResponder,
-};
+use crate::{protocol::pattern::RuntimeAssets, utils::ManagerUriSchemeResponder};
 
 /// Protocol handler for serving runtime isolation assets.
 ///
@@ -81,9 +79,7 @@ impl RuntimeIsolationProtocol {
         let path = request_to_asset_path(&request);
 
         let response = match self.assets.get(&path) {
-            Some(asset) => {
-                self.asset_response(&path, asset.as_bytes(), asset.mime())
-            }
+            Some(asset) => self.asset_response(&path, asset.as_bytes(), asset.mime()),
             None => not_found_response(),
         };
 
@@ -94,12 +90,7 @@ impl RuntimeIsolationProtocol {
     ///
     /// `index.html` receives the isolation runtime bootstrap.
     /// Other assets are served as-is.
-    fn asset_response(
-        &self,
-        path: &str,
-        bytes: &[u8],
-        mime: &str,
-    ) -> Response<Vec<u8>> {
+    fn asset_response(&self, path: &str, bytes: &[u8], mime: &str) -> Response<Vec<u8>> {
         if path == "index.html" {
             self.index_response(bytes)
         } else {
@@ -244,15 +235,13 @@ fn normalize_asset_path(path: &str) -> String {
 /// it is prepended to the document.
 fn inject_runtime_script(html: &str, runtime_script: &str) -> String {
     if let Some(index) = html.find("</head>") {
-        let mut output =
-            String::with_capacity(html.len() + runtime_script.len());
+        let mut output = String::with_capacity(html.len() + runtime_script.len());
         output.push_str(&html[..index]);
         output.push_str(runtime_script);
         output.push_str(&html[index..]);
         output
     } else if let Some(index) = html.find("</body>") {
-        let mut output =
-            String::with_capacity(html.len() + runtime_script.len());
+        let mut output = String::with_capacity(html.len() + runtime_script.len());
         output.push_str(&html[..index]);
         output.push_str(runtime_script);
         output.push_str(&html[index..]);
@@ -263,11 +252,7 @@ fn inject_runtime_script(html: &str, runtime_script: &str) -> String {
 }
 
 /// Creates a simple HTTP response with body and content type.
-fn response_with_body(
-    status: StatusCode,
-    content_type: &str,
-    body: Vec<u8>,
-) -> Response<Vec<u8>> {
+fn response_with_body(status: StatusCode, content_type: &str, body: Vec<u8>) -> Response<Vec<u8>> {
     Response::builder()
         .status(status)
         .header(CONTENT_TYPE, content_type)

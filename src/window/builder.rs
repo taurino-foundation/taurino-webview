@@ -7,10 +7,7 @@ use crate::{
 #[cfg(target_os = "macos")]
 use dpi::Position;
 use dpi::{PhysicalSize, Size};
-use std::{
-    fmt,
-    sync::{Arc, Mutex},
-};
+use std::fmt;
 #[cfg(target_os = "android")]
 use tao::platform::android::WindowBuilderExtAndroid;
 #[cfg(target_os = "ios")]
@@ -28,18 +25,13 @@ use tao::platform::unix::WindowBuilderExtUnix;
 #[cfg(windows)]
 use tao::platform::windows::WindowBuilderExtWindows;
 use tao::{
-    dpi::{
-        LogicalPosition as TaoLogicalPosition, LogicalSize as TaoLogicalSize,
-    },
+    dpi::{LogicalPosition as TaoLogicalPosition, LogicalSize as TaoLogicalSize},
     event_loop::EventLoopWindowTarget as TaoEventLoopWindowTarget,
-    window::{
-        Fullscreen, Theme as TaoTheme, WindowBuilder as TaoWindowBuilder,
-    },
+    window::{Fullscreen, Theme as TaoTheme, WindowBuilder as TaoWindowBuilder},
 };
 #[cfg(windows)]
 use windows::Win32::Foundation::HWND;
 
-use crate::utils::error::Error;
 /// Builder for configuring and creating a single application window.
 ///
 /// `WindowBuilder` wraps Tao's [`TaoWindowBuilder`] and exposes a stable,
@@ -186,12 +178,8 @@ impl WindowBuilder {
 
     /// Sets the Android activity name that created this window.
     #[cfg(target_os = "android")]
-    pub fn created_by_activity_name<S: Into<String>>(
-        mut self,
-        class_name: S,
-    ) -> Self {
-        self.inner =
-            self.inner.with_created_by_activity_name(class_name.into());
+    pub fn created_by_activity_name<S: Into<String>>(mut self, class_name: S) -> Self {
+        self.inner = self.inner.with_created_by_activity_name(class_name.into());
         self
     }
 
@@ -276,17 +264,13 @@ impl WindowBuilder {
     }
 
     /// Sets all inner-size constraints for the window.
-    pub fn inner_size_constraints(
-        mut self,
-        constraints: WindowSizeConstraints,
-    ) -> Self {
-        self.inner.window.inner_size_constraints =
-            tao::window::WindowSizeConstraints {
-                min_width: constraints.min_width,
-                min_height: constraints.min_height,
-                max_width: constraints.max_width,
-                max_height: constraints.max_height,
-            };
+    pub fn inner_size_constraints(mut self, constraints: WindowSizeConstraints) -> Self {
+        self.inner.window.inner_size_constraints = tao::window::WindowSizeConstraints {
+            min_width: constraints.min_width,
+            min_height: constraints.min_height,
+            max_width: constraints.max_width,
+            max_height: constraints.max_height,
+        };
 
         self
     }
@@ -385,10 +369,7 @@ impl WindowBuilder {
 
     /// Requests an iOS scene identifier for this window.
     #[cfg(target_os = "ios")]
-    pub fn requested_by_scene_identifier<S: Into<String>>(
-        mut self,
-        identifier: S,
-    ) -> Self {
+    pub fn requested_by_scene_identifier<S: Into<String>>(mut self, identifier: S) -> Self {
         self.inner = self
             .inner
             .with_requesting_scene_identifier(identifier.into());
@@ -499,10 +480,7 @@ impl WindowBuilder {
     ///
     /// Requires an overlay title bar style and enabled decorations.
     #[cfg(target_os = "macos")]
-    pub fn traffic_light_position<P: Into<Position>>(
-        mut self,
-        position: P,
-    ) -> Self {
+    pub fn traffic_light_position<P: Into<Position>>(mut self, position: P) -> Self {
         self.inner = self.inner.with_traffic_light_inset(position.into());
         self
     }
@@ -528,10 +506,7 @@ impl WindowBuilder {
         target_os = "netbsd",
         target_os = "openbsd"
     ))]
-    pub fn transient_for(
-        mut self,
-        parent: &impl gtk::glib::IsA<gtk::Window>,
-    ) -> Self {
+    pub fn transient_for(mut self, parent: &impl gtk::glib::IsA<gtk::Window>) -> Self {
         self.inner = self.inner.with_transient_for(parent);
         self
     }
@@ -543,10 +518,7 @@ impl WindowBuilder {
     }
 
     /// Shows the window on all workspaces where supported by the platform.
-    pub fn visible_on_all_workspaces(
-        mut self,
-        visible_on_all_workspaces: bool,
-    ) -> Self {
+    pub fn visible_on_all_workspaces(mut self, visible_on_all_workspaces: bool) -> Self {
         self.inner = self
             .inner
             .with_visible_on_all_workspaces(visible_on_all_workspaces);
@@ -555,20 +527,14 @@ impl WindowBuilder {
 
     /// Sets the Windows window class name.
     #[cfg(windows)]
-    pub fn window_classname<S: Into<String>>(
-        mut self,
-        window_classname: S,
-    ) -> Self {
+    pub fn window_classname<S: Into<String>>(mut self, window_classname: S) -> Self {
         self.inner = self.inner.with_window_classname(window_classname);
         self
     }
 
     /// No-op implementation for non-Windows targets.
     #[cfg(not(windows))]
-    pub fn window_classname<S: Into<String>>(
-        self,
-        _window_classname: S,
-    ) -> Self {
+    pub fn window_classname<S: Into<String>>(self, _window_classname: S) -> Self {
         self
     }
 }

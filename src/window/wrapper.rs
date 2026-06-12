@@ -1,27 +1,25 @@
-use crate::utils::{
-    error::Error,
-    types::{
-        CursorIcon, Icon, Monitor, ProgressBarState, ProgressBarStatus, Theme,
-        UserAttentionType,
+use crate::{
+    platform::monitor::MonitorExt,
+    utils::{
+        error::Error,
+        types::{
+            CursorIcon, Icon, Monitor, ProgressBarState, ProgressBarStatus, Theme,
+            UserAttentionType,
+        },
     },
 };
-use dpi::{
-    LogicalPosition, LogicalSize, PhysicalPosition, PhysicalSize, Position,
-    Size,
-};
+use dpi::{LogicalPosition, LogicalSize, PhysicalPosition, PhysicalSize, Position, Size};
 use tao::{
     dpi::{
         LogicalPosition as TaoLogicalPosition, LogicalSize as TaoLogicalSize,
-        PhysicalPosition as TaoPhysicalPosition,
-        PhysicalSize as TaoPhysicalSize, Position as TaoPosition,
-        Size as TaoSize,
+        PhysicalPosition as TaoPhysicalPosition, PhysicalSize as TaoPhysicalSize,
+        Position as TaoPosition, Size as TaoSize,
     },
     monitor::MonitorHandle,
     window::{
         CursorIcon as TaoCursorIcon, Icon as TaoWindowIcon,
-        ProgressBarState as TaoProgressBarState,
-        ProgressState as TaoProgressState, Theme as TaoTheme,
-        UserAttentionType as TaoUserAttentionType,
+        ProgressBarState as TaoProgressBarState, ProgressState as TaoProgressState,
+        Theme as TaoTheme, UserAttentionType as TaoUserAttentionType,
     },
 };
 
@@ -46,9 +44,7 @@ pub fn map_theme(theme: &TaoTheme) -> Theme {
 }
 
 #[cfg(target_os = "macos")]
-fn tao_activation_policy(
-    activation_policy: ActivationPolicy,
-) -> TaoActivationPolicy {
+fn tao_activation_policy(activation_policy: ActivationPolicy) -> TaoActivationPolicy {
     match activation_policy {
         ActivationPolicy::Regular => TaoActivationPolicy::Regular,
         ActivationPolicy::Accessory => TaoActivationPolicy::Accessory,
@@ -65,8 +61,7 @@ impl From<MonitorHandleWrapper> for Monitor {
             name: monitor.0.name(),
             position: PhysicalPositionWrapper(monitor.0.position()).into(),
             size: PhysicalSizeWrapper(monitor.0.size()).into(),
-            /* work_area: monitor.0.work_area(), */
-            work_area: todo!(),
+            work_area: monitor.0.work_area(),
             scale_factor: monitor.0.scale_factor(),
         }
     }
@@ -139,12 +134,8 @@ pub struct SizeWrapper(pub TaoSize);
 impl From<Size> for SizeWrapper {
     fn from(size: Size) -> Self {
         match size {
-            Size::Logical(s) => {
-                Self(TaoSize::Logical(LogicalSizeWrapper::from(s).0))
-            }
-            Size::Physical(s) => {
-                Self(TaoSize::Physical(PhysicalSizeWrapper::from(s).0))
-            }
+            Size::Logical(s) => Self(TaoSize::Logical(LogicalSizeWrapper::from(s).0)),
+            Size::Physical(s) => Self(TaoSize::Physical(PhysicalSizeWrapper::from(s).0)),
         }
     }
 }
@@ -154,9 +145,7 @@ pub struct PositionWrapper(pub TaoPosition);
 impl From<Position> for PositionWrapper {
     fn from(position: Position) -> Self {
         match position {
-            Position::Logical(s) => {
-                Self(TaoPosition::Logical(LogicalPositionWrapper::from(s).0))
-            }
+            Position::Logical(s) => Self(TaoPosition::Logical(LogicalPositionWrapper::from(s).0)),
             Position::Physical(s) => {
                 Self(TaoPosition::Physical(PhysicalPositionWrapper::from(s).0))
             }
@@ -173,8 +162,7 @@ pub(crate) fn find_monitor_for_position(
         let monitor_size = m.size();
 
         // type annotations required for 32bit targets.
-        let window_position =
-            window_position.to_physical::<i32>(m.scale_factor());
+        let window_position = window_position.to_physical::<i32>(m.scale_factor());
 
         monitor_pos.x <= window_position.x
             && window_position.x < monitor_pos.x + monitor_size.width as i32
@@ -190,9 +178,7 @@ impl From<UserAttentionType> for UserAttentionTypeWrapper {
     fn from(request_type: UserAttentionType) -> Self {
         let o = match request_type {
             UserAttentionType::Critical => TaoUserAttentionType::Critical,
-            UserAttentionType::Informational => {
-                TaoUserAttentionType::Informational
-            }
+            UserAttentionType::Informational => TaoUserAttentionType::Informational,
         };
         Self(o)
     }

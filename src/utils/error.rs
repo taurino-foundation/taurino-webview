@@ -61,9 +61,7 @@ pub enum Error {
     FailedToRemoveDataStore,
 
     /// The required webview runtime is not installed.
-    #[error(
-        "webview runtime not found; please make sure the required runtime is installed"
-    )]
+    #[error("webview runtime not found; please make sure the required runtime is installed")]
     WebviewRuntimeNotInstalled,
 
     /// Window label must be unique.

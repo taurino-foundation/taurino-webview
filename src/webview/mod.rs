@@ -19,8 +19,8 @@ use dpi::{LogicalPosition, LogicalSize};
 use http::{
     Method, Response, StatusCode,
     header::{
-        ACCESS_CONTROL_ALLOW_HEADERS, ACCESS_CONTROL_ALLOW_METHODS,
-        ACCESS_CONTROL_ALLOW_ORIGIN, CONTENT_TYPE,
+        ACCESS_CONTROL_ALLOW_HEADERS, ACCESS_CONTROL_ALLOW_METHODS, ACCESS_CONTROL_ALLOW_ORIGIN,
+        CONTENT_TYPE,
     },
 };
 use serialize_to_javascript::{DefaultTemplate, Template, default_template};
@@ -30,10 +30,15 @@ use url::Url;
 use crate::{
     protocol::{
         self,
+        ipc::{
+            ALLOWED_IPC_HEADERS, EXPOSED_IPC_HEADERS, IpcRequest, IpcResponse,
+            TAURINO_INVOKE_KEY_HEADER_NAME, TAURINO_RESPONSE_ERROR, TAURINO_RESPONSE_HEADER_NAME,
+            build_ipc_http_response, parse_ipc_body,
+        },
         pattern::{Pattern, PatternJavascript},
     },
     utils::{
-        ManagerUriSchemeContext, ManagerUriSchemeProtocol,
+        IpcMessageHandler, ManagerUriSchemeContext, ManagerUriSchemeProtocol,
         ManagerUriSchemeResponder, WebContextStore, is_local_network_url,
         types::{FrontendDist, WebviewUrl},
     },
@@ -48,15 +53,13 @@ use crate::{
     window::Window,
 };
 
-const ONLY_POST_ERROR: &[u8] =
-    br#"{"ok":false,"error":"Only POST is allowed"}"#;
+const ONLY_POST_ERROR: &[u8] = br#"{"ok":false,"error":"Only POST is allowed"}"#;
 
 const APP_PROTOCOL: &str = "taurino";
 const IPC_PROTOCOL: &str = "ipc";
 
 #[allow(dead_code)]
-pub(crate) const PROCESS_IPC_MESSAGE_FN: &str =
-    include_str!("./scripts/process-ipc-message-fn.js");
+pub(crate) const PROCESS_IPC_MESSAGE_FN: &str = include_str!("./scripts/process-ipc-message-fn.js");
 
 #[allow(dead_code)]
 #[derive(Template)]
@@ -151,8 +154,7 @@ impl ManagerConfig {
     /// Use this method before injecting isolation JavaScript or registering the
     /// isolation protocol.
     pub fn is_isolation_active(&self) -> bool {
-        self.isolation_enabled
-            && matches!(self.pattern.as_ref(), Pattern::Isolation { .. })
+        self.isolation_enabled && matches!(self.pattern.as_ref(), Pattern::Isolation { .. })
     }
 
     /// Returns whether prototype freezing is enabled.
@@ -289,10 +291,7 @@ impl ManagerConfig {
     /// })
     /// ```
     #[must_use]
-    pub fn set_isolation_assets(
-        mut self,
-        assets: HashMap<String, Vec<u8>>,
-    ) -> Self {
+    pub fn set_isolation_assets(mut self, assets: HashMap<String, Vec<u8>>) -> Self {
         self.isolation_enabled = true;
         self.pattern = Arc::new(Pattern::isolation_from_bytes_map(assets));
         self
@@ -459,17 +458,46 @@ impl Default for ManagerConfig {
     }
 }
 pub struct Manager {
+    /// Runtime configuration used by this manager.
+    ///
+    /// The config controls frontend loading, isolation mode, optional injected
+    /// JavaScript features, IPC setup, and shared web context state.
     pub(crate) config: ManagerConfig,
+
+    /// Label of the native window this manager belongs to.
+    ///
+    /// The label is exposed to JavaScript through runtime metadata and is also
+    /// used when creating protocol contexts.
     pub(crate) window_label: Arc<str>,
+
+    /// Native window identifier.
+    ///
+    /// This is set after the native window has been created. It is wrapped in a
+    /// mutex because the manager can be shared between setup and runtime code.
     pub window_id: Arc<Mutex<Option<WindowId>>>,
 
+    /// Storage for all webviews managed by this manager.
+    ///
+    /// The map key is the webview label. Each label must be unique.
     pub webviews: Arc<Mutex<HashMap<String, WebView>>>,
 
-    pub(crate) uri_scheme_protocols:
-        Mutex<HashMap<String, Arc<ManagerUriSchemeProtocol>>>,
+    /// Application-defined custom URI scheme protocols.
+    ///
+    /// These protocols are registered before built-in protocols so user-defined
+    /// protocols can be tracked and duplicate scheme registration can be avoided.
+    pub(crate) uri_scheme_protocols: Mutex<HashMap<String, Arc<ManagerUriSchemeProtocol>>>,
 
+    /// Monotonic counter used to create internal webview IDs.
     next_webview_id: Arc<AtomicU32>,
+
+    /// Monotonic counter used to create internal webview event IDs.
     next_webview_event_id: Arc<AtomicU32>,
+
+    /// Optional user-defined IPC message handler.
+    ///
+    /// The manager does not implement application commands.
+    /// It only forwards raw IPC requests to this handler.
+    ipc_message_handler: Option<Arc<IpcMessageHandler>>,
 }
 
 impl Manager {
@@ -482,9 +510,29 @@ impl Manager {
             uri_scheme_protocols: Mutex::new(HashMap::new()),
             next_webview_id: Arc::new(AtomicU32::new(0)),
             next_webview_event_id: Arc::new(AtomicU32::new(0)),
+            ipc_message_handler: None,
         })
     }
 
+    /// Registers the user-defined IPC message bridge.
+    ///
+    /// The manager itself does not parse commands into functions.
+    /// It only forwards the raw IPC request to the user's own system.
+    ///
+    /// JavaScript:
+    /// `window.__TAURI__.core.invoke("my_command", { value: 123 })`
+    ///
+    /// Rust receives:
+    /// - `request.command == "my_command"`
+    /// - `request.body == IpcBody::Json(...)`
+    #[must_use]
+    pub fn on_ipc_message<F>(mut self, handler: F) -> Self
+    where
+        F: Fn(IpcRequest) -> IpcResponse + Send + Sync + 'static,
+    {
+        self.ipc_message_handler = Some(Arc::new(handler));
+        self
+    }
     pub fn set_manager_config(mut self, config: ManagerConfig) -> Self {
         self.config = config.into();
         self
@@ -499,8 +547,7 @@ impl Manager {
     }
 
     pub fn set_window_id(self, window_id: WindowId) -> Self {
-        *self.window_id.lock().expect("poisoned window id manager") =
-            Some(window_id);
+        *self.window_id.lock().expect("poisoned window id manager") = Some(window_id);
 
         self
     }
@@ -514,15 +561,11 @@ impl Manager {
     }
 
     /// Get a locked handle to the webviews.
-    pub(crate) fn webviews_lock(
-        &self,
-    ) -> MutexGuard<'_, HashMap<String, WebView>> {
+    pub(crate) fn webviews_lock(&self) -> MutexGuard<'_, HashMap<String, WebView>> {
         self.webviews.lock().expect("poisoned webview manager")
     }
 
-    pub(crate) fn webviews_store(
-        &self,
-    ) -> Arc<Mutex<HashMap<String, WebView>>> {
+    pub(crate) fn webviews_store(&self) -> Arc<Mutex<HashMap<String, WebView>>> {
         Arc::clone(&self.webviews)
     }
 
@@ -576,10 +619,7 @@ impl Manager {
             .insert(uri_scheme, protocol);
     }
 
-    fn prepare_webview(
-        &mut self,
-        mut pending: PendingWebview,
-    ) -> crate::Result<PendingWebview> {
+    fn prepare_webview(&mut self, mut pending: PendingWebview) -> crate::Result<PendingWebview> {
         // Ensure that each webview label is unique within this manager.
         if self.webviews_lock().contains_key(&pending.label) {
             return Err(crate::Error::WebviewLabelAlreadyExists(pending.label));
@@ -621,8 +661,7 @@ impl Manager {
                 let is_app_url = app_url.make_relative(&url).is_some();
 
                 if is_app_url && is_local_network_url(&url) {
-                    Url::parse("taurino://localhost")
-                        .expect("invalid internal application URL")
+                    Url::parse("taurino://localhost").expect("invalid internal application URL")
                 } else {
                     url.clone()
                 }
@@ -675,8 +714,7 @@ impl Manager {
 
         // Framework and user initialization scripts are collected here in their
         // final injection order.
-        let mut all_initialization_scripts: Vec<InitializationScript> =
-            Vec::new();
+        let mut all_initialization_scripts: Vec<InitializationScript> = Vec::new();
 
         // Optional scripts enabled by ManagerConfig are concatenated here and later
         // injected as one main-frame initialization script.
@@ -733,8 +771,7 @@ impl Manager {
             configurable: true
         }});
         "#,
-            current_window_label =
-                serde_json::to_string(self.window_label.as_ref())?,
+            current_window_label = serde_json::to_string(self.window_label.as_ref())?,
             current_webview_label = serde_json::to_string(label)?,
         )));
 
@@ -760,10 +797,7 @@ impl Manager {
         let isolation_origin = if isolation_active {
             match self.config.pattern_ref() {
                 Pattern::Isolation { schema, .. } => {
-                    crate::protocol::pattern::format_real_schema(
-                        schema,
-                        use_https_scheme,
-                    )
+                    crate::protocol::pattern::format_real_schema(schema, use_https_scheme)
                 }
                 Pattern::Brownfield => String::new(),
             }
@@ -796,13 +830,11 @@ impl Manager {
         // Important:
         // This must be injected exactly once. Duplicating it can overwrite
         // callbacks, duplicate listeners, or break IPC state.
-        all_initialization_scripts.push(main_frame_script(
-            self.initialization_script(
-                &ipc_script,
-                &pattern_script,
-                use_https_scheme,
-            )?,
-        ));
+        all_initialization_scripts.push(main_frame_script(self.initialization_script(
+            &ipc_script,
+            &pattern_script,
+            use_https_scheme,
+        )?));
 
         // ---------------------------------------------------------------------
         // 7. Optionally inject the isolation iframe bootstrap
@@ -810,13 +842,9 @@ impl Manager {
         // The iframe bootstrap is only needed for `Pattern::Isolation`.
         // It creates the hidden isolation frame and connects it with the main page.
         if isolation_active {
-            if let Pattern::Isolation { schema, .. } = self.config.pattern_ref()
-            {
+            if let Pattern::Isolation { schema, .. } = self.config.pattern_ref() {
                 let isolation_src =
-                    crate::protocol::pattern::format_real_schema(
-                        schema,
-                        use_https_scheme,
-                    );
+                    crate::protocol::pattern::format_real_schema(schema, use_https_scheme);
 
                 all_initialization_scripts.push(main_frame_script(
                 IsolationJavascript {
@@ -858,8 +886,7 @@ impl Manager {
 
         #[cfg(any(target_os = "macos", target_os = "ios"))]
         if self.config.enable_print_shortcut {
-            init_from_config_allowed_scripts
-                .push_str(include_str!("./scripts/print.js"));
+            init_from_config_allowed_scripts.push_str(include_str!("./scripts/print.js"));
         }
 
         if self.config.enable_devtools_shortcut {
@@ -889,8 +916,7 @@ impl Manager {
         // Inject optional config-driven scripts only when at least one feature
         // actually generated JavaScript.
         if !init_from_config_allowed_scripts.trim().is_empty() {
-            all_initialization_scripts
-                .push(main_frame_script(init_from_config_allowed_scripts));
+            all_initialization_scripts.push(main_frame_script(init_from_config_allowed_scripts));
         }
 
         // ---------------------------------------------------------------------
@@ -902,11 +928,9 @@ impl Manager {
         // - `window.__TAURI__.core.invoke`
         // - metadata
         // - optional config-driven helpers
-        all_initialization_scripts
-            .extend(pending.webview_attributes.initialization_scripts);
+        all_initialization_scripts.extend(pending.webview_attributes.initialization_scripts);
 
-        pending.webview_attributes.initialization_scripts =
-            all_initialization_scripts;
+        pending.webview_attributes.initialization_scripts = all_initialization_scripts;
 
         // ---------------------------------------------------------------------
         // 10. Register user-defined custom protocols
@@ -924,16 +948,9 @@ impl Manager {
             pending.internal_register_uri_scheme_protocol(
                 uri_scheme,
                 move |webview_id, request, responder| {
-                    let context = ManagerUriSchemeContext::new(
-                        window_label.as_ref(),
-                        webview_id,
-                    );
+                    let context = ManagerUriSchemeContext::new(window_label.as_ref(), webview_id);
 
-                    protocol.handle(
-                        context,
-                        request,
-                        ManagerUriSchemeResponder(responder),
-                    );
+                    protocol.handle(context, request, ManagerUriSchemeResponder(responder));
                 },
             );
         }
@@ -945,8 +962,7 @@ impl Manager {
         // - `taurino` for serving app/frontend assets
         // - `ipc` for JavaScript -> Rust invoke calls
         // - the isolation protocol when isolation is active
-        let window_url =
-            Url::parse(&pending.url).map_err(crate::Error::InvalidUrl)?;
+        let window_url = Url::parse(&pending.url).map_err(crate::Error::InvalidUrl)?;
 
         let window_origin = Self::window_origin(&window_url, use_https_scheme);
 
@@ -959,9 +975,7 @@ impl Manager {
 
         Ok(pending)
     }
-    fn registered_uri_scheme_protocols(
-        &self,
-    ) -> Vec<(String, Arc<ManagerUriSchemeProtocol>)> {
+    fn registered_uri_scheme_protocols(&self) -> Vec<(String, Arc<ManagerUriSchemeProtocol>)> {
         self.uri_scheme_protocols
             .lock()
             .expect("poisoned URI scheme protocol manager")
@@ -978,29 +992,19 @@ impl Manager {
         use_https_scheme: bool,
     ) {
         if !registered_scheme_protocols.contains(APP_PROTOCOL) {
-            let _web_resource_request_handler =
-                pending.web_resource_request_handler.take();
+            let _web_resource_request_handler = pending.web_resource_request_handler.take();
 
-            let app_protocol = protocol::taurino::get(
-                self.config.resource_path().cloned(),
-                &window_origin,
-            );
+            let app_protocol =
+                protocol::taurino::get(self.config.resource_path().cloned(), &window_origin);
 
             let window_label = Arc::clone(&self.window_label);
 
             pending.internal_register_uri_scheme_protocol(
                 APP_PROTOCOL,
                 move |webview_id, request, responder| {
-                    let context = ManagerUriSchemeContext::new(
-                        window_label.as_ref(),
-                        webview_id,
-                    );
+                    let context = ManagerUriSchemeContext::new(window_label.as_ref(), webview_id);
 
-                    app_protocol.handle(
-                        context,
-                        request,
-                        ManagerUriSchemeResponder(responder),
-                    );
+                    app_protocol.handle(context, request, ManagerUriSchemeResponder(responder));
                 },
             );
 
@@ -1009,148 +1013,86 @@ impl Manager {
 
         if !registered_scheme_protocols.contains(IPC_PROTOCOL) {
             let allowed_origin = window_origin.clone();
-
-            const ALLOWED_IPC_HEADERS: &str = "content-type, taurino-callback, taurino-error, taurino-invoke-key";
-            const EXPOSED_IPC_HEADERS: &str = "Taurino-Response";
+            let window_label = Arc::clone(&self.window_label);
+            let ipc_message_handler = self.ipc_message_handler.clone();
 
             pending.internal_register_uri_scheme_protocol(
                 IPC_PROTOCOL,
                 move |webview_id, request, responder| {
                     let method = request.method().clone();
 
-                    let command = request
-                        .uri()
-                        .path()
-                        .trim_start_matches('/')
-                        .to_string();
-
-                    let response: Response<Cow<'static, [u8]>> = if method
-                        == Method::OPTIONS
-                    {
+                    let response: Response<Cow<'static, [u8]>> = if method == Method::OPTIONS {
                         Response::builder()
                             .status(StatusCode::NO_CONTENT)
-                            .header(
-                                ACCESS_CONTROL_ALLOW_ORIGIN,
-                                allowed_origin.as_str(),
-                            )
-                            .header(
-                                ACCESS_CONTROL_ALLOW_METHODS,
-                                "POST, OPTIONS",
-                            )
-                            .header(
-                                ACCESS_CONTROL_ALLOW_HEADERS,
-                                ALLOWED_IPC_HEADERS,
-                            )
-                            .header(
-                                "Access-Control-Expose-Headers",
-                                EXPOSED_IPC_HEADERS,
-                            )
+                            .header(ACCESS_CONTROL_ALLOW_ORIGIN, allowed_origin.as_str())
+                            .header(ACCESS_CONTROL_ALLOW_METHODS, "POST, OPTIONS")
+                            .header(ACCESS_CONTROL_ALLOW_HEADERS, ALLOWED_IPC_HEADERS)
+                            .header("Access-Control-Expose-Headers", EXPOSED_IPC_HEADERS)
                             .body(Cow::Owned(Vec::new()))
                             .expect("failed to build IPC OPTIONS response")
                     } else if method != Method::POST {
                         Response::builder()
                             .status(StatusCode::METHOD_NOT_ALLOWED)
                             .header(CONTENT_TYPE, "application/json")
-                            .header("Taurino-Response", "error")
-                            .header(
-                                ACCESS_CONTROL_ALLOW_ORIGIN,
-                                allowed_origin.as_str(),
-                            )
-                            .header(
-                                ACCESS_CONTROL_ALLOW_METHODS,
-                                "POST, OPTIONS",
-                            )
-                            .header(
-                                ACCESS_CONTROL_ALLOW_HEADERS,
-                                ALLOWED_IPC_HEADERS,
-                            )
-                            .header(
-                                "Access-Control-Expose-Headers",
-                                EXPOSED_IPC_HEADERS,
-                            )
+                            .header(TAURINO_RESPONSE_HEADER_NAME, TAURINO_RESPONSE_ERROR)
+                            .header(ACCESS_CONTROL_ALLOW_ORIGIN, allowed_origin.as_str())
+                            .header(ACCESS_CONTROL_ALLOW_METHODS, "POST, OPTIONS")
+                            .header(ACCESS_CONTROL_ALLOW_HEADERS, ALLOWED_IPC_HEADERS)
+                            .header("Access-Control-Expose-Headers", EXPOSED_IPC_HEADERS)
                             .body(Cow::Borrowed(ONLY_POST_ERROR))
                             .expect("failed to build IPC method error response")
                     } else {
-                        let body =
-                            String::from_utf8_lossy(request.body().as_ref());
+                        let Some(handler) = ipc_message_handler.as_ref() else {
+                            let error_response = IpcResponse::reject_json(serde_json::json!({
+                                "error": "No IPC message handler registered"
+                            }));
 
-                        let (json, taurino_response) = match command.as_str() {
-                            "ping" => {
-                                let received: serde_json::Value =
-                                    serde_json::from_str(&body).unwrap_or_else(
-                                        |_| {
-                                            serde_json::Value::String(
-                                                body.to_string(),
-                                            )
-                                        },
-                                    );
+                            let response =
+                                build_ipc_http_response(allowed_origin.as_str(), error_response);
 
-                                (
-                                    serde_json::json!({
-                                        "ok": true,
-                                        "command": "ping",
-                                        "webviewId": webview_id,
-                                        "received": received
-                                    })
-                                    .to_string(),
-                                    "ok",
-                                )
-                            }
-
-                            "add" => {
-                                let value: serde_json::Value =
-                                    serde_json::from_str(&body)
-                                        .unwrap_or_default();
-
-                                let a = value["a"].as_i64().unwrap_or(0);
-                                let b = value["b"].as_i64().unwrap_or(0);
-
-                                (
-                                    serde_json::json!({
-                                        "ok": true,
-                                        "command": "add",
-                                        "result": a + b
-                                    })
-                                    .to_string(),
-                                    "ok",
-                                )
-                            }
-
-                            _ => (
-                                serde_json::json!({
-                                    "ok": false,
-                                    "error": format!(
-                                        "Unknown IPC command: {}",
-                                        command
-                                    )
-                                })
-                                .to_string(),
-                                "error",
-                            ),
+                            responder(response);
+                            return;
                         };
 
-                        Response::builder()
-                            .status(StatusCode::OK)
-                            .header(CONTENT_TYPE, "application/json")
-                            .header("Taurino-Response", taurino_response)
-                            .header(
-                                ACCESS_CONTROL_ALLOW_ORIGIN,
-                                allowed_origin.as_str(),
-                            )
-                            .header(
-                                ACCESS_CONTROL_ALLOW_METHODS,
-                                "POST, OPTIONS",
-                            )
-                            .header(
-                                ACCESS_CONTROL_ALLOW_HEADERS,
-                                ALLOWED_IPC_HEADERS,
-                            )
-                            .header(
-                                "Access-Control-Expose-Headers",
-                                EXPOSED_IPC_HEADERS,
-                            )
-                            .body(Cow::Owned(json.into_bytes()))
-                            .expect("failed to build IPC response")
+                        let content_type = request
+                            .headers()
+                            .get(CONTENT_TYPE)
+                            .and_then(|value| value.to_str().ok())
+                            .unwrap_or("application/octet-stream")
+                            .to_string();
+
+                        let command = percent_encoding::percent_decode(
+                            request.uri().path().trim_start_matches('/').as_bytes(),
+                        )
+                        .decode_utf8_lossy()
+                        .to_string();
+
+                        let origin = request
+                            .headers()
+                            .get("Origin")
+                            .and_then(|value| value.to_str().ok())
+                            .map(ToOwned::to_owned);
+
+                        let invoke_key = request
+                            .headers()
+                            .get(TAURINO_INVOKE_KEY_HEADER_NAME)
+                            .and_then(|value| value.to_str().ok())
+                            .map(ToOwned::to_owned);
+
+                        let ipc_request = IpcRequest {
+                            window_label: window_label.to_string(),
+                            webview_id: webview_id.to_string(),
+                            command,
+                            body: parse_ipc_body(&content_type, request.body().as_ref()),
+                            headers: request.headers().clone(),
+                            content_type,
+                            origin,
+                            invoke_key,
+                        };
+
+                        let user_response = handler(ipc_request);
+
+                        build_ipc_http_response(allowed_origin.as_str(), user_response)
                     };
 
                     responder(response);
@@ -1218,10 +1160,7 @@ impl Manager {
         "null".into()
     }
 
-    fn event_initialization_script(
-        function_name: &str,
-        listeners: &str,
-    ) -> String {
+    fn event_initialization_script(function_name: &str, listeners: &str) -> String {
         format!(
             r#"
             Object.defineProperty(window, '{function_name}', {{
@@ -1344,13 +1283,10 @@ impl Manager {
         .render_default(&Default::default())?
         .into_string();
 
-        let ipc_bootstrap_script =
-            format!("{ipc_protocol_script}\n{ipc_script}");
+        let ipc_bootstrap_script = format!("{ipc_protocol_script}\n{ipc_script}");
 
-        let event_script = Self::event_initialization_script(
-            "__TAURINO_EVENT__",
-            "__TAURINO_LISTENERS__",
-        );
+        let event_script =
+            Self::event_initialization_script("__TAURINO_EVENT__", "__TAURINO_LISTENERS__");
 
         InitJavascript {
             pattern_script,
@@ -1364,11 +1300,7 @@ impl Manager {
         .map_err(Into::into)
     }
 
-    pub fn resize_webviews(
-        &self,
-        window: &Window,
-        size: tao::dpi::PhysicalSize<u32>,
-    ) {
+    pub fn resize_webviews(&self, window: &Window, size: tao::dpi::PhysicalSize<u32>) {
         let inner = window.get_inner();
         let size = size.to_logical::<f32>(inner.scale_factor());
         let webviews = self.webviews_lock();
@@ -1408,12 +1340,7 @@ impl Manager {
     ) -> crate::Result<()> {
         let pending = self.prepare_webview(pending)?;
         let inner = window.get_inner();
-        let webview = create_wry_webview(
-            self.window_label.to_string(),
-            inner,
-            pending,
-            self,
-        )?;
+        let webview = create_wry_webview(self.window_label.to_string(), inner, pending, self)?;
 
         self.webviews_lock().insert(webview.label.clone(), webview);
 

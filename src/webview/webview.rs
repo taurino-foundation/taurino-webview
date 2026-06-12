@@ -37,8 +37,7 @@ impl Drop for WebView {
         if Rc::get_mut(&mut self.inner).is_some() {
             let mut context_store = self.context_store.lock().unwrap();
 
-            if let Some(web_context) = context_store.get_mut(&self.context_key)
-            {
+            if let Some(web_context) = context_store.get_mut(&self.context_key) {
                 web_context.referenced_by_webviews.remove(&self.label);
 
                 // https://github.com/tauri-apps/tauri/issues/14626

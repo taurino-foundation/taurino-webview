@@ -117,15 +117,9 @@ impl FixedLayout {
                 let sidebar_width = width.min(window_width);
                 let main_width = (window_width - sidebar_width).max(0.0);
 
-                let sidebar =
-                    LayoutBounds::new(0.0, 0.0, sidebar_width, window_height);
+                let sidebar = LayoutBounds::new(0.0, 0.0, sidebar_width, window_height);
 
-                let main = LayoutBounds::new(
-                    sidebar_width,
-                    0.0,
-                    main_width,
-                    window_height,
-                );
+                let main = LayoutBounds::new(sidebar_width, 0.0, main_width, window_height);
 
                 let mut result = vec![sidebar];
 
@@ -146,15 +140,9 @@ impl FixedLayout {
                 let sidebar_width = width.min(window_width);
                 let main_width = (window_width - sidebar_width).max(0.0);
 
-                let main =
-                    LayoutBounds::new(0.0, 0.0, main_width, window_height);
+                let main = LayoutBounds::new(0.0, 0.0, main_width, window_height);
 
-                let sidebar = LayoutBounds::new(
-                    main_width,
-                    0.0,
-                    sidebar_width,
-                    window_height,
-                );
+                let sidebar = LayoutBounds::new(main_width, 0.0, sidebar_width, window_height);
 
                 let mut result = vec![main];
 
@@ -175,15 +163,9 @@ impl FixedLayout {
                 let header_height = header_height.min(window_height);
                 let body_height = (window_height - header_height).max(0.0);
 
-                let header =
-                    LayoutBounds::new(0.0, 0.0, window_width, header_height);
+                let header = LayoutBounds::new(0.0, 0.0, window_width, header_height);
 
-                let body = LayoutBounds::new(
-                    0.0,
-                    header_height,
-                    window_width,
-                    body_height,
-                );
+                let body = LayoutBounds::new(0.0, header_height, window_width, body_height);
 
                 let mut result = vec![header];
                 result.extend(split_horizontal(body, count - 1));
@@ -198,15 +180,9 @@ impl FixedLayout {
                 let footer_height = footer_height.min(window_height);
                 let body_height = (window_height - footer_height).max(0.0);
 
-                let body =
-                    LayoutBounds::new(0.0, 0.0, window_width, body_height);
+                let body = LayoutBounds::new(0.0, 0.0, window_width, body_height);
 
-                let footer = LayoutBounds::new(
-                    0.0,
-                    body_height,
-                    window_width,
-                    footer_height,
-                );
+                let footer = LayoutBounds::new(0.0, body_height, window_width, footer_height);
 
                 let mut result = split_horizontal(body, count - 1);
                 result.push(footer);
@@ -222,21 +198,13 @@ impl FixedLayout {
                 }
 
                 let header_height = header_height.min(window_height);
-                let footer_height =
-                    footer_height.min(window_height - header_height);
+                let footer_height = footer_height.min(window_height - header_height);
 
-                let body_height =
-                    (window_height - header_height - footer_height).max(0.0);
+                let body_height = (window_height - header_height - footer_height).max(0.0);
 
-                let header =
-                    LayoutBounds::new(0.0, 0.0, window_width, header_height);
+                let header = LayoutBounds::new(0.0, 0.0, window_width, header_height);
 
-                let body = LayoutBounds::new(
-                    0.0,
-                    header_height,
-                    window_width,
-                    body_height,
-                );
+                let body = LayoutBounds::new(0.0, header_height, window_width, body_height);
 
                 let footer = LayoutBounds::new(
                     0.0,
@@ -266,16 +234,14 @@ impl FixedLayout {
             } => {
                 let header_h = header_height.unwrap_or(0.0).min(window_height);
 
-                let footer_h =
-                    footer_height.unwrap_or(0.0).min(window_height - header_h);
+                let footer_h = footer_height.unwrap_or(0.0).min(window_height - header_h);
 
                 let center_y = header_h;
                 let center_h = (window_height - header_h - footer_h).max(0.0);
 
                 let left_w = left_width.unwrap_or(0.0).min(window_width);
 
-                let right_w =
-                    right_width.unwrap_or(0.0).min(window_width - left_w);
+                let right_w = right_width.unwrap_or(0.0).min(window_width - left_w);
 
                 let center_x = left_w;
                 let center_w = (window_width - left_w - right_w).max(0.0);
@@ -283,23 +249,14 @@ impl FixedLayout {
                 let mut result = Vec::new();
 
                 if header_height.is_some() {
-                    result.push(LayoutBounds::new(
-                        0.0,
-                        0.0,
-                        window_width,
-                        header_h,
-                    ));
+                    result.push(LayoutBounds::new(0.0, 0.0, window_width, header_h));
                 }
 
                 if left_width.is_some() {
-                    result.push(LayoutBounds::new(
-                        0.0, center_y, left_w, center_h,
-                    ));
+                    result.push(LayoutBounds::new(0.0, center_y, left_w, center_h));
                 }
 
-                result.push(LayoutBounds::new(
-                    center_x, center_y, center_w, center_h,
-                ));
+                result.push(LayoutBounds::new(center_x, center_y, center_w, center_h));
 
                 if right_width.is_some() {
                     result.push(LayoutBounds::new(
@@ -320,9 +277,7 @@ impl FixedLayout {
                 }
 
                 while result.len() < count {
-                    result.push(LayoutBounds::new(
-                        center_x, center_y, center_w, center_h,
-                    ));
+                    result.push(LayoutBounds::new(center_x, center_y, center_w, center_h));
                 }
 
                 result.truncate(count);
@@ -362,14 +317,7 @@ fn split_horizontal(area: LayoutBounds, count: usize) -> Vec<LayoutBounds> {
     let width = area.width / count as f32;
 
     (0..count)
-        .map(|index| {
-            LayoutBounds::new(
-                area.x + width * index as f32,
-                area.y,
-                width,
-                area.height,
-            )
-        })
+        .map(|index| LayoutBounds::new(area.x + width * index as f32, area.y, width, area.height))
         .collect()
 }
 
@@ -381,23 +329,11 @@ fn split_vertical(area: LayoutBounds, count: usize) -> Vec<LayoutBounds> {
     let height = area.height / count as f32;
 
     (0..count)
-        .map(|index| {
-            LayoutBounds::new(
-                area.x,
-                area.y + height * index as f32,
-                area.width,
-                height,
-            )
-        })
+        .map(|index| LayoutBounds::new(area.x, area.y + height * index as f32, area.width, height))
         .collect()
 }
 
-fn grid(
-    area: LayoutBounds,
-    count: usize,
-    rows: usize,
-    cols: usize,
-) -> Vec<LayoutBounds> {
+fn grid(area: LayoutBounds, count: usize, rows: usize, cols: usize) -> Vec<LayoutBounds> {
     if count == 0 {
         return Vec::new();
     }

@@ -3,14 +3,10 @@ use crate::platform::window::calculate_window_center_position;
 use crate::utils::error::Error;
 use crate::{
     Result,
-    window::{
-        Window, builder::WindowBuilder, wrapper::find_monitor_for_position,
-    },
+    window::{Window, builder::WindowBuilder, wrapper::find_monitor_for_position},
 };
 use std::sync::{Arc, Mutex};
-use tao::{
-    dpi::PhysicalSize as TaoPhysicalSize, event_loop::EventLoopWindowTarget,
-};
+use tao::{dpi::PhysicalSize as TaoPhysicalSize, event_loop::EventLoopWindowTarget};
 
 pub(crate) fn create_window<T: 'static>(
     event_loop: &EventLoopWindowTarget<T>,
@@ -38,20 +34,14 @@ pub(crate) fn create_window<T: 'static>(
 
     #[cfg(target_os = "macos")]
     {
-        if tabbing_identifier.is_none()
-            || inner.window.transparent
-            || !inner.window.decorations
-        {
+        if tabbing_identifier.is_none() || inner.window.transparent || !inner.window.decorations {
             inner = inner.with_automatic_window_tabbing(false);
         }
     }
 
     if prevent_overflow.is_some() || center {
         let monitor = if let Some(window_position) = &inner.window.position {
-            find_monitor_for_position(
-                event_loop.available_monitors(),
-                *window_position,
-            )
+            find_monitor_for_position(event_loop.available_monitors(), *window_position)
         } else {
             event_loop.primary_monitor()
         };
@@ -77,9 +67,7 @@ pub(crate) fn create_window<T: 'static>(
                     AdjustWindowRect, WS_OVERLAPPEDWINDOW,
                 };
                 let mut rect = windows::Win32::Foundation::RECT::default();
-                let result = unsafe {
-                    AdjustWindowRect(&mut rect, WS_OVERLAPPEDWINDOW, false)
-                };
+                let result = unsafe { AdjustWindowRect(&mut rect, WS_OVERLAPPEDWINDOW, false) };
                 if result.is_ok() {
                     shadow_width = (rect.right - rect.left) as u32;
                     // rect.bottom is made out of shadow, and we don't care about it
@@ -94,19 +82,17 @@ pub(crate) fn create_window<T: 'static>(
                     work_area.size.width - margin.width,
                     work_area.size.height - margin.height,
                 );
-                if window_size.width > constraint.width
-                    || window_size.height > constraint.height
-                {
+                if window_size.width > constraint.width || window_size.height > constraint.height {
                     if window_size.width > constraint.width {
-                        inner_size.width = inner_size.width.saturating_sub(
-                            window_size.width - constraint.width,
-                        );
+                        inner_size.width = inner_size
+                            .width
+                            .saturating_sub(window_size.width - constraint.width);
                         window_size.width = constraint.width;
                     }
                     if window_size.height > constraint.height {
-                        inner_size.height = inner_size.height.saturating_sub(
-                            window_size.height - constraint.height,
-                        );
+                        inner_size.height = inner_size
+                            .height
+                            .saturating_sub(window_size.height - constraint.height);
                         window_size.height = constraint.height;
                     }
                     inner.window.inner_size = Some(inner_size.into());
@@ -115,8 +101,7 @@ pub(crate) fn create_window<T: 'static>(
 
             if center {
                 window_size.width += shadow_width;
-                let position =
-                    calculate_window_center_position(window_size, monitor);
+                let position = calculate_window_center_position(window_size, monitor);
                 let logical_position = position.to_logical::<f64>(scale_factor);
 
                 inner = inner.with_position(logical_position);
@@ -135,8 +120,7 @@ pub(crate) fn create_window<T: 'static>(
         if let Some(target_monitor) =
             find_monitor_for_position(event_loop.available_monitors(), position)
         {
-            inner.window.fullscreen =
-                Some(Fullscreen::Borderless(Some(target_monitor)));
+            inner.window.fullscreen = Some(Fullscreen::Borderless(Some(target_monitor)));
         }
     }
 

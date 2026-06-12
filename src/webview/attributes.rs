@@ -2,10 +2,7 @@ use std::path::PathBuf;
 use url::Url;
 
 use crate::utils::{
-    types::{
-        BackgroundThrottlingPolicy, Color, ScrollBarStyle, WebviewUrl,
-        WindowEffectsConfig,
-    },
+    types::{BackgroundThrottlingPolicy, Color, ScrollBarStyle, WebviewUrl, WindowEffectsConfig},
     wrapper::Rect,
 };
 
@@ -89,9 +86,8 @@ pub struct WebviewAttributes {
     /// Set the environment for the webview.
     /// Useful if you need to share the same environment, for instance when using the [`PendingWebview::new_window_handler`].
     #[cfg(windows)]
-    pub environment: Option<
-        webview2_com::Microsoft::Web::WebView2::Win32::ICoreWebView2Environment,
-    >,
+    pub environment:
+        Option<webview2_com::Microsoft::Web::WebView2::Win32::ICoreWebView2Environment>,
 
     /// Creates a new webview sharing the same web process with the provided webview.
     /// Useful if you need to link a webview to another, for instance when using the [`PendingWebview::new_window_handler`].
@@ -105,8 +101,7 @@ pub struct WebviewAttributes {
     pub related_view: Option<webkit2gtk::WebView>,
 
     #[cfg(target_os = "macos")]
-    pub webview_configuration:
-        Option<objc2::rc::Retained<objc2_web_kit::WKWebViewConfiguration>>,
+    pub webview_configuration: Option<objc2::rc::Retained<objc2_web_kit::WKWebViewConfiguration>>,
 }
 
 unsafe impl Send for WebviewAttributes {}
@@ -118,10 +113,7 @@ pub struct InputAccessoryViewBuilder(pub Box<InputAccessoryViewBuilderFn>);
 
 #[cfg(target_os = "ios")]
 impl std::fmt::Debug for InputAccessoryViewBuilder {
-    fn fmt(
-        &self,
-        f: &mut std::fmt::Formatter<'_>,
-    ) -> std::result::Result<(), std::fmt::Error> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::result::Result<(), std::fmt::Error> {
         f.debug_struct("InputAccessoryViewBuilder").finish()
     }
 }
@@ -233,10 +225,7 @@ impl WebviewAttributes {
     /// [addDocumentStartJavaScript]: https://developer.android.com/reference/androidx/webkit/WebViewCompat#addDocumentStartJavaScript(android.webkit.WebView,java.lang.String,java.util.Set%3Cjava.lang.String%3E)
     /// [onPageStarted]: https://developer.android.com/reference/android/webkit/WebViewClient#onPageStarted(android.webkit.WebView,%20java.lang.String,%20android.graphics.Bitmap)
     #[must_use]
-    pub fn initialization_script_on_all_frames(
-        mut self,
-        script: impl Into<String>,
-    ) -> Self {
+    pub fn initialization_script_on_all_frames(mut self, script: impl Into<String>) -> Self {
         self.initialization_scripts.push(InitializationScript {
             script: script.into(),
             for_main_frame_only: false,
@@ -436,10 +425,7 @@ impl WebviewAttributes {
     ///
     /// see <https://github.com/tauri-apps/tauri/issues/5250#issuecomment-2569380578>
     #[must_use]
-    pub fn background_throttling(
-        mut self,
-        policy: Option<BackgroundThrottlingPolicy>,
-    ) -> Self {
+    pub fn background_throttling(mut self, policy: Option<BackgroundThrottlingPolicy>) -> Self {
         self.background_throttling = policy;
         self
     }
