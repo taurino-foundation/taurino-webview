@@ -1,16 +1,19 @@
-use crate::events::{
-    DownloadEvent, DragDropEvent, PageLoadEvent, SynthesizedEvent,
-};
-use crate::pending::PendingWebview;
-use crate::types::{BackgroundThrottlingPolicy, ScrollBarStyle};
-use crate::utils::{
-    IpcHandler, NewWindowFeatures, NewWindowOpener, NewWindowResponse,
-    WebContext, WebViewMetaData, WebviewBounds, WebviewIpcHandler,
-    parse_proxy_url,
+use super::pending::PendingWebview;
+use crate::{
+    utils::{
+        IpcHandler, NewWindowFeatures, NewWindowOpener, NewWindowResponse,
+        WebContext, WebViewMetaData, WebviewBounds, WebviewIpcHandler,
+        events::{
+            DownloadEvent, DragDropEvent, PageLoadEvent, SynthesizedEvent,
+        },
+        parse_proxy_url,
+        types::{BackgroundThrottlingPolicy, ScrollBarStyle},
+        wrapper::RectWrapper,
+    },
+    webview::Manager,
 };
 
 use crate::webview::{WebView, WebviewId};
-use crate::{manager::Manager, wrapper::RectWrapper};
 use dpi::{LogicalPosition, PhysicalPosition};
 use std::collections::hash_map::Entry::{Occupied, Vacant};
 use std::{

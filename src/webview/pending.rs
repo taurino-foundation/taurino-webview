@@ -2,7 +2,7 @@ use std::borrow::Cow;
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use crate::attributes::WebviewAttributes;
+use super::attributes::WebviewAttributes;
 use crate::utils::{
     DocumentTitleChangedHandler, DownloadHandler, NavigationHandler,
     NewWindowHandler, OnPageLoadHandler, ProxyHandler,

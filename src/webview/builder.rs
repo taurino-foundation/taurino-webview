@@ -1,11 +1,10 @@
-use crate::layout::LayoutBounds;
 use crate::{
-    attributes::WebviewAttributes,
-    pending::PendingWebview,
-    types::{ScrollBarStyle, WebviewUrl},
-    wrapper::Rect,
+    utils::{
+        types::{ScrollBarStyle, WebviewUrl},
+        wrapper::Rect,
+    },
+    webview::{attributes::WebviewAttributes, pending::PendingWebview},
 };
-use dpi::{LogicalPosition, LogicalSize};
 use std::path::PathBuf;
 use url::Url;
 
@@ -27,6 +26,10 @@ impl WebViewBuilder {
         }
     }
 
+    pub fn use_https_scheme(mut self, use_https_scheme: bool) -> Self {
+        self.attrs.use_https_scheme = use_https_scheme;
+        self
+    }
     pub fn app<L, P>(label: L, path: P) -> Self
     where
         L: Into<String>,
@@ -56,11 +59,8 @@ impl WebViewBuilder {
         self
     }
 
-    pub fn bounds_rect(mut self, bounds: LayoutBounds) -> Self {
-        self.attrs.bounds = Some(Rect {
-            position: LogicalPosition::new(bounds.x, bounds.y).into(),
-            size: LogicalSize::new(bounds.width, bounds.height).into(),
-        });
+    pub fn bounds_rect(mut self, bounds: Rect) -> Self {
+        self.attrs.bounds = Some(bounds);
 
         self
     }

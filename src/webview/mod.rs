@@ -1,3 +1,10 @@
+pub mod attributes;
+pub mod builder;
+pub mod factory;
+pub mod layout;
+pub mod pending;
+pub mod webview;
+
 use std::{
     borrow::Cow,
     collections::{HashMap, HashSet},
@@ -9,35 +16,51 @@ use std::{
 };
 
 use dpi::{LogicalPosition, LogicalSize};
+use http::{
+    Method, Response, StatusCode,
+    header::{
+        ACCESS_CONTROL_ALLOW_HEADERS, ACCESS_CONTROL_ALLOW_METHODS,
+        ACCESS_CONTROL_ALLOW_ORIGIN, CONTENT_TYPE,
+    },
+};
 use serialize_to_javascript::{DefaultTemplate, Template, default_template};
-use tao::window::{Window, WindowId};
+use tao::window::WindowId;
 use url::Url;
 
 use crate::{
-    attributes::InitializationScript,
-    factory::create_wry_webview,
-    layout::FixedLayout,
-    pending::PendingWebview,
-    protocol,
-    protocol::pattern::{Pattern, PatternJavascript},
-    types::{FrontendDist, WebviewUrl},
+    protocol::{
+        self,
+        pattern::{Pattern, PatternJavascript},
+    },
     utils::{
         ManagerUriSchemeContext, ManagerUriSchemeProtocol,
         ManagerUriSchemeResponder, WebContextStore, is_local_network_url,
+        types::{FrontendDist, WebviewUrl},
     },
-    webview::{WebView, WebviewId},
 };
+use crate::{
+    webview::{
+        attributes::InitializationScript,
+        factory::create_wry_webview,
+        pending::PendingWebview,
+        webview::{WebView, WebviewId},
+    },
+    window::Window,
+};
+
+const ONLY_POST_ERROR: &[u8] =
+    br#"{"ok":false,"error":"Only POST is allowed"}"#;
 
 const APP_PROTOCOL: &str = "taurino";
 const IPC_PROTOCOL: &str = "ipc";
 
 #[allow(dead_code)]
 pub(crate) const PROCESS_IPC_MESSAGE_FN: &str =
-    include_str!("../scripts/process-ipc-message-fn.js");
+    include_str!("../../scripts/process-ipc-message-fn.js");
 
 #[allow(dead_code)]
 #[derive(Template)]
-#[default_template("../scripts/isolation.js")]
+#[default_template("../../scripts/isolation.js")]
 pub(crate) struct IsolationJavascript<'a> {
     pub(crate) isolation_src: &'a str,
     pub(crate) style: &'a str,
@@ -45,7 +68,7 @@ pub(crate) struct IsolationJavascript<'a> {
 
 #[allow(dead_code)]
 #[derive(Template)]
-#[default_template("../scripts/ipc.js")]
+#[default_template("../../scripts/ipc.js")]
 pub(crate) struct IpcJavascript<'a> {
     pub(crate) isolation_origin: &'a str,
 }
@@ -176,6 +199,7 @@ impl ManagerConfig {
     }
 
     /// Returns the runtime invoke key.
+    #[allow(dead_code)]
     pub(crate) fn invoke_key(&self) -> &str {
         &self.invoke_key
     }
@@ -317,6 +341,7 @@ impl ManagerConfig {
     }
 
     /// Sets the runtime invoke key.
+    #[allow(dead_code)]
     pub(crate) fn set_invoke_key<S>(mut self, key: S) -> Self
     where
         S: Into<String>,
@@ -551,9 +576,9 @@ impl Manager {
 
             WebviewUrl::External(url) => {
                 let app_url = self.get_app_url(use_https_scheme);
-                let is_app_url = app_url.make_relative(url).is_some();
+                let is_app_url = app_url.make_relative(&url).is_some();
 
-                if is_app_url && is_local_network_url(url) {
+                if is_app_url && is_local_network_url(&url) {
                     Url::parse("taurino://localhost")
                         .expect("invalid internal application URL")
                 } else {
@@ -823,16 +848,118 @@ impl Manager {
         }
 
         if !registered_scheme_protocols.contains(IPC_PROTOCOL) {
+            let allowed_origin = window_origin.clone();
+
             pending.internal_register_uri_scheme_protocol(
                 IPC_PROTOCOL,
-                move |_webview_id, _request, _responder| {
-                    // TODO: Add your IPC protocol handler here.
+                move |webview_id, request, responder| {
+                    let method = request.method().clone();
+                    let command = request
+                        .uri()
+                        .path()
+                        .trim_start_matches('/')
+                        .to_string();
+
+                    let response: Response<Cow<'static, [u8]>> = if method
+                        == Method::OPTIONS
+                    {
+                        Response::builder()
+                            .status(StatusCode::NO_CONTENT)
+                            .header(
+                                ACCESS_CONTROL_ALLOW_ORIGIN,
+                                allowed_origin.as_str(),
+                            )
+                            .header(
+                                ACCESS_CONTROL_ALLOW_METHODS,
+                                "POST, OPTIONS",
+                            )
+                            .header(
+                                ACCESS_CONTROL_ALLOW_HEADERS,
+                                "content-type",
+                            )
+                            .body(Cow::Owned(Vec::new()))
+                            .expect("failed to build IPC OPTIONS response")
+                    } else if method != Method::POST {
+                        Response::builder()
+                            .status(StatusCode::METHOD_NOT_ALLOWED)
+                            .header(CONTENT_TYPE, "application/json")
+                            .header(
+                                ACCESS_CONTROL_ALLOW_ORIGIN,
+                                allowed_origin.as_str(),
+                            )
+                            .body(Cow::Borrowed(ONLY_POST_ERROR))
+                            .expect("failed to build IPC method error response")
+                    } else {
+                        let body =
+                            String::from_utf8_lossy(request.body().as_ref());
+
+                        let json = match command.as_str() {
+                            "ping" => {
+                                format!(
+                                    r#"{{
+                                    "ok": true,
+                                    "command": "ping",
+                                    "webviewId": "{:?}",
+                                    "received": {}
+                                }}"#,
+                                    webview_id, body
+                                )
+                            }
+
+                            "add" => {
+                                let value: serde_json::Value =
+                                    serde_json::from_str(&body)
+                                        .unwrap_or_default();
+
+                                let a = value["a"].as_i64().unwrap_or(0);
+                                let b = value["b"].as_i64().unwrap_or(0);
+
+                                format!(
+                                    r#"{{
+                                    "ok": true,
+                                    "command": "add",
+                                    "result": {}
+                                }}"#,
+                                    a + b
+                                )
+                            }
+
+                            _ => {
+                                format!(
+                                    r#"{{
+                                    "ok": false,
+                                    "error": "Unknown IPC command: {}"
+                                }}"#,
+                                    command
+                                )
+                            }
+                        };
+
+                        Response::builder()
+                            .status(StatusCode::OK)
+                            .header(CONTENT_TYPE, "application/json")
+                            .header(
+                                ACCESS_CONTROL_ALLOW_ORIGIN,
+                                allowed_origin.as_str(),
+                            )
+                            .header(
+                                ACCESS_CONTROL_ALLOW_METHODS,
+                                "POST, OPTIONS",
+                            )
+                            .header(
+                                ACCESS_CONTROL_ALLOW_HEADERS,
+                                "content-type",
+                            )
+                            .body(Cow::Owned(json.into_bytes()))
+                            .expect("failed to build IPC response")
+                    };
+
+                    responder(response);
                 },
             );
 
             registered_scheme_protocols.insert(IPC_PROTOCOL.to_string());
         }
-
         if self.config.is_isolation_active() {
             if let Pattern::Isolation {
                 assets,
@@ -928,7 +1055,7 @@ impl Manager {
         use_https_scheme: bool,
     ) -> crate::Result<String> {
         #[derive(Template)]
-        #[default_template("../scripts/init.js")]
+        #[default_template("../../scripts/init.js")]
         struct InitJavascript<'a> {
             #[raw]
             pattern_script: &'a str,
@@ -943,7 +1070,7 @@ impl Manager {
         }
 
         #[derive(Template)]
-        #[default_template("../scripts/core.js")]
+        #[default_template("../../scripts/core.js")]
         struct CoreJavascript<'a> {
             os_name: &'a str,
             protocol_scheme: &'a str,
@@ -980,7 +1107,8 @@ impl Manager {
         window: &Window,
         size: tao::dpi::PhysicalSize<u32>,
     ) {
-        let size = size.to_logical::<f32>(window.scale_factor());
+        let inner = window.get_inner();
+        let size = size.to_logical::<f32>(inner.scale_factor());
         let webviews = self.webviews_lock();
 
         for webview in webviews.values() {
@@ -1011,32 +1139,16 @@ impl Manager {
         }
     }
 
-    pub fn resize_webviews_with_layout(
-        &self,
-        window: &Window,
-        layout: &FixedLayout,
-    ) {
-        let size = window.inner_size().to_logical::<f32>(window.scale_factor());
-
-        let webviews = self.webviews_lock();
-
-        let bounds =
-            layout.resolve(webviews.values().len(), size.width, size.height);
-
-        for (webview, bounds) in webviews.values().zip(bounds) {
-            let _ = webview.set_bounds(bounds.to_wry_rect());
-        }
-    }
     pub fn create_webview(
         &mut self,
         window: &Window,
         pending: PendingWebview,
     ) -> crate::Result<()> {
         let pending = self.prepare_webview(pending)?;
-
+        let inner = window.get_inner();
         let webview = create_wry_webview(
             self.window_label.to_string(),
-            window,
+            inner,
             pending,
             self,
         )?;

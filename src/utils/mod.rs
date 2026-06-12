@@ -1,5 +1,26 @@
+pub mod async_runtime;
+pub mod error;
+pub mod events;
+pub mod types;
+pub mod wrapper;
+use crate::utils::{
+    events::{DownloadEvent, PageLoadEvent, SynthesizedEvent, WebviewEvent},
+    types::Theme,
+};
+
+use std::{
+    borrow::Cow,
+    collections::{HashMap, HashSet},
+    fmt,
+    path::PathBuf,
+    sync::{Arc, Mutex},
+};
+
+use crate::webview::webview::WebviewId;
+
+const MIMETYPE_PLAIN: &str = "text/plain";
 use http::Request;
-use tao::window::WindowId;
+use tao::window::{Theme as TaoTheme, WindowId};
 use url::Url;
 use wry::{ProxyConfig, ProxyEndpoint, WebContext as WryWebContext};
 type ManagerUriSchemeResponderFn =
@@ -322,21 +343,6 @@ impl<'a> WebViewMetaData<'a> {
     }
 }
 
-use std::{
-    borrow::Cow,
-    collections::{HashMap, HashSet},
-    fmt,
-    path::PathBuf,
-    sync::{Arc, Mutex},
-};
-
-use crate::{
-    events::{DownloadEvent, PageLoadEvent, SynthesizedEvent, WebviewEvent},
-    webview::WebviewId,
-};
-
-const MIMETYPE_PLAIN: &str = "text/plain";
-
 /// [Web Compatible MimeTypes](https://developer.mozilla.org/en-US/docs/Web/HTTP/Basics_of_HTTP/MIME_types#important_mime_types_for_web_developers)
 #[allow(missing_docs)]
 pub enum MimeType {
@@ -434,5 +440,41 @@ impl MimeType {
             }
             Some(mime) => mime.to_string(),
         }
+    }
+}
+
+/* #[cfg(target_os = "macos")]
+fn inner_size(
+  window: &Window,
+  webviews: &[Webview],
+  has_children: bool,
+) -> TaoPhysicalSize<u32> {
+  if !has_children && !webviews.is_empty() {
+    use wry::WebViewExtMacOS;
+    let webview = webviews.first().unwrap();
+    let view = unsafe { Retained::cast_unchecked::<objc2_app_kit::NSView>(webview.webview()) };
+    let view_frame = view.frame();
+    let logical: TaoLogicalSize<f64> = (view_frame.size.width, view_frame.size.height).into();
+    return logical.to_physical(window.scale_factor());
+  }
+
+  window.inner_size()
+}
+
+#[cfg(not(target_os = "macos"))]
+#[allow(unused_variables)]
+fn inner_size(
+  window: &Window,
+  webviews: &[Webview],
+  has_children: bool,
+) -> TaoPhysicalSize<u32> {
+  window.inner_size()
+} */
+
+pub(crate) fn to_tao_theme(theme: Option<Theme>) -> Option<TaoTheme> {
+    match theme {
+        Some(Theme::Light) => Some(TaoTheme::Light),
+        Some(Theme::Dark) => Some(TaoTheme::Dark),
+        _ => None,
     }
 }

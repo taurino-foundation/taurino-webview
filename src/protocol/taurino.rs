@@ -16,9 +16,9 @@ use http::{
 use percent_encoding::percent_decode;
 use reqwest::Client;
 
-use crate::{
-    async_runtime, async_runtime::Mutex, types::FrontendDist,
-    utils::ManagerUriSchemeProtocol,
+use crate::utils::{
+    ManagerUriSchemeProtocol, async_runtime, async_runtime::Mutex,
+    types::FrontendDist,
 };
 
 const APP_PROTOCOL: &str = "taurino";

@@ -1,4 +1,7 @@
+use std::borrow::Cow;
 use std::{fmt, path::PathBuf, str::FromStr};
+
+use dpi::{PhysicalPosition, PhysicalSize, PixelUnit};
 
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_with::skip_serializing_none;
@@ -171,6 +174,8 @@ mod window_effects {
 }
 
 pub use window_effects::{WindowEffect, WindowEffectState};
+
+use crate::utils::wrapper::PhysicalRect;
 
 /// How the window title bar should be displayed on macOS.
 #[derive(Debug, Clone, PartialEq, Eq, Copy, Default)]
@@ -525,5 +530,228 @@ impl fmt::Display for WebviewUrl {
 impl Default for WebviewUrl {
     fn default() -> Self {
         Self::App("index.html".into())
+    }
+}
+
+/// Window size constraints
+#[derive(Clone, Copy, PartialEq, Debug, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WindowSizeConstraints {
+    /// The minimum width a window can be, If this is `None`, the window will have no minimum width.
+    ///
+    /// The default is `None`.
+    pub min_width: Option<PixelUnit>,
+    /// The minimum height a window can be, If this is `None`, the window will have no minimum height.
+    ///
+    /// The default is `None`.
+    pub min_height: Option<PixelUnit>,
+    /// The maximum width a window can be, If this is `None`, the window will have no maximum width.
+    ///
+    /// The default is `None`.
+    pub max_width: Option<PixelUnit>,
+    /// The maximum height a window can be, If this is `None`, the window will have no maximum height.
+    ///
+    /// The default is `None`.
+    pub max_height: Option<PixelUnit>,
+}
+
+/// Window icon.
+#[derive(Debug, Clone)]
+pub struct Icon<'a> {
+    /// RGBA bytes of the icon.
+    pub rgba: Cow<'a, [u8]>,
+    /// Icon width.
+    pub width: u32,
+    /// Icon height.
+    pub height: u32,
+}
+
+/// Monitor descriptor.
+#[derive(Debug, Clone)]
+pub struct Monitor {
+    /// A human-readable name of the monitor.
+    /// `None` if the monitor doesn't exist anymore.
+    pub name: Option<String>,
+    /// The monitor's resolution.
+    pub size: PhysicalSize<u32>,
+    /// The top-left corner position of the monitor relative to the larger full screen area.
+    pub position: PhysicalPosition<i32>,
+    /// The monitor's work_area.
+    pub work_area: PhysicalRect<i32, u32>,
+    /// Returns the scale factor that can be used to map logical pixels to physical pixels, and vice versa.
+    pub scale_factor: f64,
+}
+
+/// Progress bar status.
+#[derive(Debug, Clone, Copy, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ProgressBarStatus {
+    /// Hide progress bar.
+    None,
+    /// Normal state.
+    Normal,
+    /// Indeterminate state. **Treated as Normal on Linux and macOS**
+    Indeterminate,
+    /// Paused state. **Treated as Normal on Linux**
+    Paused,
+    /// Error state. **Treated as Normal on Linux**
+    Error,
+}
+
+/// Progress Bar State
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProgressBarState {
+    /// The progress bar status.
+    pub status: Option<ProgressBarStatus>,
+    /// The progress bar progress. This can be a value ranging from `0` to `100`
+    pub progress: Option<u64>,
+    /// The `.desktop` filename with the Unity desktop window manager, for example `myapp.desktop` **Linux Only**
+    pub desktop_filename: Option<String>,
+}
+
+/// Type of user attention requested on a window.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(tag = "type")]
+pub enum UserAttentionType {
+    /// ## Platform-specific
+    /// - **macOS:** Bounces the dock icon until the application is in focus.
+    /// - **Windows:** Flashes both the window and the taskbar button until the application is in focus.
+    Critical,
+    /// ## Platform-specific
+    /// - **macOS:** Bounces the dock icon once.
+    /// - **Windows:** Flashes the taskbar button until the application is in focus.
+    Informational,
+}
+
+#[derive(Default, Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(tag = "type")]
+pub enum DeviceEventFilter {
+    /// Always filter out device events.
+    Always,
+    /// Filter out device events while the window is not focused.
+    #[default]
+    Unfocused,
+    /// Report all device events regardless of window focus.
+    Never,
+}
+
+/// Defines the orientation that a window resize will be performed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+pub enum ResizeDirection {
+    East,
+    North,
+    NorthEast,
+    NorthWest,
+    South,
+    SouthEast,
+    SouthWest,
+    West,
+}
+
+/// Describes the appearance of the mouse cursor.
+#[non_exhaustive]
+#[derive(Debug, Default, Copy, Clone, PartialEq, Eq, Hash)]
+pub enum CursorIcon {
+    /// The platform-dependent default cursor.
+    #[default]
+    Default,
+    /// A simple crosshair.
+    Crosshair,
+    /// A hand (often used to indicate links in web browsers).
+    Hand,
+    /// Self explanatory.
+    Arrow,
+    /// Indicates something is to be moved.
+    Move,
+    /// Indicates text that may be selected or edited.
+    Text,
+    /// Program busy indicator.
+    Wait,
+    /// Help indicator (often rendered as a "?")
+    Help,
+    /// Progress indicator. Shows that processing is being done. But in contrast
+    /// with "Wait" the user may still interact with the program. Often rendered
+    /// as a spinning beach ball, or an arrow with a watch or hourglass.
+    Progress,
+
+    /// Cursor showing that something cannot be done.
+    NotAllowed,
+    ContextMenu,
+    Cell,
+    VerticalText,
+    Alias,
+    Copy,
+    NoDrop,
+    /// Indicates something can be grabbed.
+    Grab,
+    /// Indicates something is grabbed.
+    Grabbing,
+    AllScroll,
+    ZoomIn,
+    ZoomOut,
+
+    /// Indicate that some edge is to be moved. For example, the 'SeResize' cursor
+    /// is used when the movement starts from the south-east corner of the box.
+    EResize,
+    NResize,
+    NeResize,
+    NwResize,
+    SResize,
+    SeResize,
+    SwResize,
+    WResize,
+    EwResize,
+    NsResize,
+    NeswResize,
+    NwseResize,
+    ColResize,
+    RowResize,
+}
+
+impl<'de> Deserialize<'de> for CursorIcon {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let s = String::deserialize(deserializer)?;
+        Ok(match s.to_lowercase().as_str() {
+            "default" => CursorIcon::Default,
+            "crosshair" => CursorIcon::Crosshair,
+            "hand" => CursorIcon::Hand,
+            "arrow" => CursorIcon::Arrow,
+            "move" => CursorIcon::Move,
+            "text" => CursorIcon::Text,
+            "wait" => CursorIcon::Wait,
+            "help" => CursorIcon::Help,
+            "progress" => CursorIcon::Progress,
+            "notallowed" => CursorIcon::NotAllowed,
+            "contextmenu" => CursorIcon::ContextMenu,
+            "cell" => CursorIcon::Cell,
+            "verticaltext" => CursorIcon::VerticalText,
+            "alias" => CursorIcon::Alias,
+            "copy" => CursorIcon::Copy,
+            "nodrop" => CursorIcon::NoDrop,
+            "grab" => CursorIcon::Grab,
+            "grabbing" => CursorIcon::Grabbing,
+            "allscroll" => CursorIcon::AllScroll,
+            "zoomin" => CursorIcon::ZoomIn,
+            "zoomout" => CursorIcon::ZoomOut,
+            "eresize" => CursorIcon::EResize,
+            "nresize" => CursorIcon::NResize,
+            "neresize" => CursorIcon::NeResize,
+            "nwresize" => CursorIcon::NwResize,
+            "sresize" => CursorIcon::SResize,
+            "seresize" => CursorIcon::SeResize,
+            "swresize" => CursorIcon::SwResize,
+            "wresize" => CursorIcon::WResize,
+            "ewresize" => CursorIcon::EwResize,
+            "nsresize" => CursorIcon::NsResize,
+            "neswresize" => CursorIcon::NeswResize,
+            "nwseresize" => CursorIcon::NwseResize,
+            "colresize" => CursorIcon::ColResize,
+            "rowresize" => CursorIcon::RowResize,
+            _ => CursorIcon::Default,
+        })
     }
 }

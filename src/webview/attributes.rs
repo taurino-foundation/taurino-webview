@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 use url::Url;
 
-use crate::{
+use crate::utils::{
     types::{
         BackgroundThrottlingPolicy, Color, ScrollBarStyle, WebviewUrl,
         WindowEffectsConfig,
