@@ -77,6 +77,7 @@ pub(crate) fn create_wry_webview(
         uri_scheme_protocols,
     } = pending;
 
+    let use_https_scheme = webview_attributes.use_https_scheme;
     let mut web_context = manager
         .config
         .web_context()
@@ -147,7 +148,11 @@ pub(crate) fn create_wry_webview(
             },
         );
     }
-
+    #[cfg(any(target_os = "windows", target_os = "android"))]
+    {
+        webview_builder = webview_builder
+            .with_https_scheme(webview_attributes.use_https_scheme);
+    }
     if webview_attributes.javascript_disabled {
         webview_builder = webview_builder.with_javascript_disabled();
     }

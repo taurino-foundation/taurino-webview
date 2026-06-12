@@ -495,7 +495,11 @@ impl Manager {
     pub(crate) fn get_app_url(&self, https: bool) -> Cow<'_, Url> {
         match self.config.resource_path() {
             Some(FrontendDist::Url(url)) => Cow::Borrowed(url),
-            _ => self.taurino_protocol_url(https),
+            _ => {
+                let url = self.taurino_protocol_url(https);
+                println!("current Render Url: {:?}", url);
+                url
+            }
         }
     }
     /// The custom protocol URL used to serve embedded assets.
