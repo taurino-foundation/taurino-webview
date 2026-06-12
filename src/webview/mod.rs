@@ -56,11 +56,11 @@ const IPC_PROTOCOL: &str = "ipc";
 
 #[allow(dead_code)]
 pub(crate) const PROCESS_IPC_MESSAGE_FN: &str =
-    include_str!("../../scripts/process-ipc-message-fn.js");
+    include_str!("./scripts/process-ipc-message-fn.js");
 
 #[allow(dead_code)]
 #[derive(Template)]
-#[default_template("../../scripts/isolation.js")]
+#[default_template("./scripts/isolation.js")]
 pub(crate) struct IsolationJavascript<'a> {
     pub(crate) isolation_src: &'a str,
     pub(crate) style: &'a str,
@@ -68,7 +68,7 @@ pub(crate) struct IsolationJavascript<'a> {
 
 #[allow(dead_code)]
 #[derive(Template)]
-#[default_template("../../scripts/ipc.js")]
+#[default_template("./scripts/ipc.js")]
 pub(crate) struct IpcJavascript<'a> {
     pub(crate) isolation_origin: &'a str,
 }
@@ -84,57 +84,45 @@ pub(crate) struct IpcJavascript<'a> {
 /// isolation assets as raw bytes at runtime.
 pub struct ManagerConfig {
     /// Enables or disables the isolation runtime.
-    ///
-    /// This is an explicit runtime option. It decides whether isolation-related
-    /// JavaScript and protocols should be installed.
-    ///
-    /// Important:
-    /// `Pattern::Isolation` stores the isolation data, but this flag decides
-    /// whether that data is actually used.
     isolation_enabled: bool,
 
     /// Enables prototype freezing in the injected JavaScript runtime.
-    ///
-    /// When enabled, the runtime may inject JavaScript that freezes selected
-    /// prototypes to reduce prototype-pollution risks.
     freeze_prototype: bool,
 
+    /// Enables the window drag JavaScript runtime.
+    allow_dragging: bool,
+
+    /// Enables Ctrl/Cmd + P print shortcut.
+    enable_print_shortcut: bool,
+
+    /// Enables F12 / Ctrl+Shift+I devtools shortcut.
+    ///
+    /// Important:
+    /// This only calls the Rust command `toggle_devtools`.
+    /// You still need to implement this command on the Rust side.
+    enable_devtools_shortcut: bool,
+
+    /// Enables Ctrl/Cmd + plus/minus/zero zoom hotkeys.
+    enable_zoom_hotkeys: bool,
+
     /// The current application pattern.
-    ///
-    /// `Pattern::Brownfield` represents the normal application mode.
-    /// `Pattern::Isolation` contains the runtime isolation assets and metadata.
-    ///
-    /// The pattern alone does not activate isolation. Isolation is active only
-    /// when `isolation_enabled == true` and this field is `Pattern::Isolation`.
     pattern: Arc<Pattern>,
 
     /// Indicates whether a native webview runtime is available on the system.
-    ///
-    /// This is detected by checking `wry::webview_version()`.
     webview_runtime_installed: bool,
 
     /// JavaScript used to initialize the invoke system.
-    ///
-    /// This script is injected into the webview as part of the runtime bootstrap.
     invoke_initialization_script: String,
 
     /// Runtime-generated invoke key.
-    ///
-    /// This key can be used to protect internal invoke calls.
     pub(crate) invoke_key: String,
 
     /// Defines where the frontend is loaded from.
-    ///
-    /// This can be a development server URL, a static directory, a list of files,
-    /// or `None`, in which case the internal application protocol is used.
     frontend_dist: Option<FrontendDist>,
 
     /// Shared web context storage.
-    ///
-    /// This is used to manage persistent webview context data.
     web_context: WebContextStore,
 }
-
 impl ManagerConfig {
     /// Creates a new manager configuration using default values.
     pub fn new() -> crate::Result<Self> {
@@ -404,6 +392,50 @@ impl ManagerConfig {
         self.frontend_dist = Some(FrontendDist::Files(files));
         self
     }
+
+    // ---------------------------------------------------------------------
+    // Optional JavaScript runtime flags
+    // ---------------------------------------------------------------------
+
+    pub fn allow_dragging(&self) -> bool {
+        self.allow_dragging
+    }
+
+    pub fn enable_print_shortcut(&self) -> bool {
+        self.enable_print_shortcut
+    }
+
+    pub fn enable_devtools_shortcut(&self) -> bool {
+        self.enable_devtools_shortcut
+    }
+
+    pub fn enable_zoom_hotkeys(&self) -> bool {
+        self.enable_zoom_hotkeys
+    }
+
+    #[must_use]
+    pub fn set_allow_dragging(mut self, value: bool) -> Self {
+        self.allow_dragging = value;
+        self
+    }
+
+    #[must_use]
+    pub fn set_enable_print_shortcut(mut self, value: bool) -> Self {
+        self.enable_print_shortcut = value;
+        self
+    }
+
+    #[must_use]
+    pub fn set_enable_devtools_shortcut(mut self, value: bool) -> Self {
+        self.enable_devtools_shortcut = value;
+        self
+    }
+
+    #[must_use]
+    pub fn set_enable_zoom_hotkeys(mut self, value: bool) -> Self {
+        self.enable_zoom_hotkeys = value;
+        self
+    }
 }
 
 impl Default for ManagerConfig {
@@ -411,6 +443,12 @@ impl Default for ManagerConfig {
         Self {
             isolation_enabled: false,
             freeze_prototype: false,
+
+            allow_dragging: false,
+            enable_print_shortcut: false,
+            enable_devtools_shortcut: false,
+            enable_zoom_hotkeys: false,
+
             pattern: Arc::new(Pattern::Brownfield),
             webview_runtime_installed: wry::webview_version().is_ok(),
             invoke_initialization_script: String::new(),
@@ -623,12 +661,30 @@ impl Manager {
         mut pending: PendingWebview,
         label: &str,
     ) -> crate::Result<PendingWebview> {
+        // ---------------------------------------------------------------------
+        // Resolve runtime options for this webview
+        // ---------------------------------------------------------------------
+        // `use_https_scheme` decides how internal custom protocol URLs are built.
+        // On Windows/Android this usually maps custom schemes to
+        // `http(s)://<scheme>.localhost`.
         let use_https_scheme = pending.webview_attributes.use_https_scheme;
+
+        // Isolation is only active when the config explicitly enables it and the
+        // current pattern is actually `Pattern::Isolation`.
         let isolation_active = self.config.is_isolation_active();
 
+        // Framework and user initialization scripts are collected here in their
+        // final injection order.
         let mut all_initialization_scripts: Vec<InitializationScript> =
             Vec::new();
 
+        // Optional scripts enabled by ManagerConfig are concatenated here and later
+        // injected as one main-frame initialization script.
+        let mut init_from_config_allowed_scripts = String::new();
+
+        // Converts a JavaScript source string into a main-frame-only initialization
+        // script. This prevents framework scripts from being injected into iframes
+        // unless explicitly intended.
         fn main_frame_script(script: String) -> InitializationScript {
             InitializationScript {
                 script,
@@ -637,8 +693,11 @@ impl Manager {
         }
 
         // ---------------------------------------------------------------------
-        // Base runtime namespace
+        // 1. Create the base runtime namespace
         // ---------------------------------------------------------------------
+        // This namespace is the root object used by the injected Taurino runtime.
+        // It must exist before metadata, IPC, callbacks, events, or plugin scripts
+        // are injected.
         all_initialization_scripts.push(main_frame_script(
             r#"
         Object.defineProperty(window, 'isTaurino', {
@@ -659,8 +718,11 @@ impl Manager {
         ));
 
         // ---------------------------------------------------------------------
-        // Metadata
+        // 2. Inject runtime metadata
         // ---------------------------------------------------------------------
+        // The metadata gives JavaScript access to the current window label and
+        // webview label. Values are serialized with `serde_json` to avoid broken
+        // JavaScript when labels contain quotes, spaces, or special characters.
         all_initialization_scripts.push(main_frame_script(format!(
             r#"
         Object.defineProperty(window.__TAURINO_INTERNALS__, 'metadata', {{
@@ -677,9 +739,13 @@ impl Manager {
         )));
 
         // ---------------------------------------------------------------------
-        // Pattern script
-        // Important: this must also exist in Brownfield mode.
+        // 3. Render the pattern script
         // ---------------------------------------------------------------------
+        // This script must be present in both Brownfield and Isolation mode.
+        // In Brownfield mode it tells the JavaScript IPC layer to use the normal
+        // postMessage/custom-protocol path.
+        // In Isolation mode it tells the JavaScript IPC layer to route messages
+        // through the isolation iframe.
         let pattern_script = PatternJavascript {
             pattern: self.config.pattern_ref().into(),
         }
@@ -687,10 +753,10 @@ impl Manager {
         .into_string();
 
         // ---------------------------------------------------------------------
-        // IPC script
-        // Important: this must also exist in Brownfield mode.
-        // Only isolation_origin is empty when isolation is disabled.
+        // 4. Resolve the isolation origin
         // ---------------------------------------------------------------------
+        // The isolation origin is only needed when the isolation runtime is active.
+        // In Brownfield mode it intentionally stays empty.
         let isolation_origin = if isolation_active {
             match self.config.pattern_ref() {
                 Pattern::Isolation { schema, .. } => {
@@ -705,6 +771,12 @@ impl Manager {
             String::new()
         };
 
+        // ---------------------------------------------------------------------
+        // 5. Render the IPC routing script
+        // ---------------------------------------------------------------------
+        // This script installs `window.__TAURINO_INTERNALS__.ipc`.
+        // It must exist in Brownfield mode too, otherwise `invoke()` waits forever
+        // because no IPC function becomes available.
         let ipc_script = IpcJavascript {
             isolation_origin: &isolation_origin,
         }
@@ -712,9 +784,18 @@ impl Manager {
         .into_string();
 
         // ---------------------------------------------------------------------
-        // Main runtime initialization
-        // This must be injected exactly once.
+        // 6. Inject the main Taurino runtime
         // ---------------------------------------------------------------------
+        // This includes:
+        // - pattern script
+        // - IPC protocol script
+        // - IPC routing script
+        // - core invoke/callback script
+        // - event initialization script
+        //
+        // Important:
+        // This must be injected exactly once. Duplicating it can overwrite
+        // callbacks, duplicate listeners, or break IPC state.
         all_initialization_scripts.push(main_frame_script(
             self.initialization_script(
                 &ipc_script,
@@ -724,9 +805,10 @@ impl Manager {
         ));
 
         // ---------------------------------------------------------------------
-        // Optional isolation iframe
-        // This must also be injected only once.
+        // 7. Optionally inject the isolation iframe bootstrap
         // ---------------------------------------------------------------------
+        // The iframe bootstrap is only needed for `Pattern::Isolation`.
+        // It creates the hidden isolation frame and connects it with the main page.
         if isolation_active {
             if let Pattern::Isolation { schema, .. } = self.config.pattern_ref()
             {
@@ -748,8 +830,78 @@ impl Manager {
         }
 
         // ---------------------------------------------------------------------
-        // User scripts after framework scripts
+        // 8. Render optional scripts enabled by ManagerConfig
         // ---------------------------------------------------------------------
+        // These scripts are optional framework features. They are injected before
+        // user-defined scripts so user scripts can rely on them being available.
+        #[derive(Template)]
+        #[default_template("./scripts/drag.js")]
+        struct Drag<'a> {
+            os_name: &'a str,
+        }
+
+        #[derive(Template)]
+        #[default_template("./scripts/toggle-devtools.js")]
+        struct Devtools<'a> {
+            os_name: &'a str,
+        }
+
+        if self.config.allow_dragging {
+            init_from_config_allowed_scripts.push_str(
+                &Drag {
+                    os_name: std::env::consts::OS,
+                }
+                .render_default(&Default::default())?
+                .into_string(),
+            );
+        }
+
+        #[cfg(any(target_os = "macos", target_os = "ios"))]
+        if self.config.enable_print_shortcut {
+            init_from_config_allowed_scripts
+                .push_str(include_str!("./scripts/print.js"));
+        }
+
+        if self.config.enable_devtools_shortcut {
+            init_from_config_allowed_scripts.push_str(
+                &Devtools {
+                    os_name: std::env::consts::OS,
+                }
+                .render_default(&Default::default())?
+                .into_string(),
+            );
+        }
+
+        if self.config.enable_zoom_hotkeys {
+            // TODO:
+            // Replace this with a dedicated zoom script.
+            // Currently this reuses `drag.js`, which is probably not correct for
+            // zoom handling.
+            init_from_config_allowed_scripts.push_str(
+                &Drag {
+                    os_name: std::env::consts::OS,
+                }
+                .render_default(&Default::default())?
+                .into_string(),
+            );
+        }
+
+        // Inject optional config-driven scripts only when at least one feature
+        // actually generated JavaScript.
+        if !init_from_config_allowed_scripts.trim().is_empty() {
+            all_initialization_scripts
+                .push(main_frame_script(init_from_config_allowed_scripts));
+        }
+
+        // ---------------------------------------------------------------------
+        // 9. Append user-defined initialization scripts
+        // ---------------------------------------------------------------------
+        // User scripts are appended after framework scripts. This guarantees that
+        // user code can access:
+        // - `window.__TAURINO_INTERNALS__`
+        // - `window.__TAURI__.core.invoke`
+        // - metadata
+        // - optional config-driven helpers
         all_initialization_scripts
             .extend(pending.webview_attributes.initialization_scripts);
 
@@ -757,8 +909,10 @@ impl Manager {
             all_initialization_scripts;
 
         // ---------------------------------------------------------------------
-        // Register custom protocols
+        // 10. Register user-defined custom protocols
         // ---------------------------------------------------------------------
+        // Protocols registered by the application are installed before the built-in
+        // protocols so the manager can avoid duplicate scheme registration.
         let protocols = self.registered_uri_scheme_protocols();
         let mut registered_scheme_protocols = HashSet::new();
 
@@ -785,8 +939,12 @@ impl Manager {
         }
 
         // ---------------------------------------------------------------------
-        // Register built-in protocols
+        // 11. Register built-in protocols
         // ---------------------------------------------------------------------
+        // Built-in protocols include:
+        // - `taurino` for serving app/frontend assets
+        // - `ipc` for JavaScript -> Rust invoke calls
+        // - the isolation protocol when isolation is active
         let window_url =
             Url::parse(&pending.url).map_err(crate::Error::InvalidUrl)?;
 
@@ -801,7 +959,6 @@ impl Manager {
 
         Ok(pending)
     }
-
     fn registered_uri_scheme_protocols(
         &self,
     ) -> Vec<(String, Arc<ManagerUriSchemeProtocol>)> {
@@ -1090,7 +1247,47 @@ impl Manager {
             "#
         )
     }
+    /*
 
+    /*
+
+
+
+
+
+      #[command(root = "crate")]
+      pub async fn toggle_maximize<R: Runtime>(
+        window: Window<R>,
+        label: Option<String>,
+      ) -> crate::Result<()> {
+        let window = get_window(window, label)?;
+        match window.is_maximized()? {
+          true => window.unmaximize()?,
+          false => window.maximize()?,
+        };
+        Ok(())
+      }
+
+      #[command(root = "crate")]
+      pub async fn internal_toggle_maximize<R: Runtime>(
+        window: Window<R>,
+        label: Option<String>,
+      ) -> crate::Result<()> {
+        let window = get_window(window, label)?;
+        if window.is_resizable()? {
+          match window.is_maximized()? {
+            true => window.unmaximize()?,
+            false => window.maximize()?,
+          };
+        }
+        Ok(())
+      }
+
+
+
+    */
+
+    */
     fn initialization_script(
         &self,
         ipc_script: &str,
@@ -1098,7 +1295,7 @@ impl Manager {
         use_https_scheme: bool,
     ) -> crate::Result<String> {
         #[derive(Template)]
-        #[default_template("../../scripts/init.js")]
+        #[default_template("./scripts/init.js")]
         struct InitJavascript<'a> {
             #[raw]
             pattern_script: &'a str,
@@ -1113,7 +1310,7 @@ impl Manager {
         }
 
         #[derive(Template)]
-        #[default_template("../../scripts/core.js")]
+        #[default_template("./scripts/core.js")]
         struct CoreJavascript<'a> {
             os_name: &'a str,
             protocol_scheme: &'a str,
@@ -1121,7 +1318,7 @@ impl Manager {
         }
 
         #[derive(Template)]
-        #[default_template("../../scripts/ipc-protocol.js")]
+        #[default_template("./scripts/ipc-protocol.js")]
         struct IpcProtocolJavascript<'a> {
             invoke_key: &'a str,
             os_name: &'a str,

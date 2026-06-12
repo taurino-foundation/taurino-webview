@@ -311,7 +311,7 @@ pub(crate) enum IsolationSide {
 }
 
 #[derive(Template)]
-#[default_template("../../scripts/pattern.js")]
+#[default_template("../webview/scripts/pattern.js")]
 pub(crate) struct PatternJavascript {
     pub(crate) pattern: PatternObject,
 }
