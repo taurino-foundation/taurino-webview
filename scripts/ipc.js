@@ -147,7 +147,7 @@
         case 'isolation':
           if (!isIsolationPayload(message)) {
             console.error(
-              'Tauri "Isolation" Pattern found an invalid isolation message payload',
+              'Taurino "Isolation" Pattern found an invalid isolation message payload',
               message
             )
             break
@@ -163,13 +163,13 @@
 
         case 'error':
           console.error(
-            'Tauri IPC found a Tauri Pattern, but it was an error. Check for other log messages to find the cause.'
+            'Taurino IPC found a Tauri Pattern, but it was an error. Check for other log messages to find the cause.'
           )
           break
 
         default:
           console.error(
-            'Tauri IPC did not find a Tauri Pattern that it understood.'
+            'Taurino IPC did not find a Tauri Pattern that it understood.'
           )
           break
       }

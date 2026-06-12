@@ -131,5 +131,5 @@
 
   defineValue(coreApi, 'invoke', invoke)
   defineValue(tauriApi, 'core', coreApi)
-  defineValue(window, '__TAURI__', tauriApi)
+  defineValue(window, '__TAURINO__', tauriApi)
 })()
