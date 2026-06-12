@@ -1,56 +1,557 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Taurino IPC Example</title>
-</head>
-<body>
-  <h1>IPC Example</h1>
+<!doctype html>
+<html lang="de">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Taurino IPC Test</title>
 
-  <button id="ping">Ping Rust</button>
-  <button id="add">Add</button>
-
-  <pre id="output"></pre>
-
-  <script>
-    async function invoke(command, payload = {}) {
-      const response = await fetch(`ipc://localhost/${command}`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json"
-        },
-        body: JSON.stringify(payload)
-      });
-
-      const text = await response.text();
-
-      if (!response.ok) {
-        throw new Error(text);
+    <style>
+      :root {
+        --bg: #0f172a;
+        --panel: #111827;
+        --panel-light: #1f2937;
+        --text: #e5e7eb;
+        --muted: #9ca3af;
+        --success: #22c55e;
+        --error: #ef4444;
+        --warning: #f59e0b;
+        --accent: #38bdf8;
+        --border: #334155;
       }
 
-      return JSON.parse(text);
-    }
+      * {
+        box-sizing: border-box;
+      }
 
-    document.getElementById("ping").addEventListener("click", async () => {
-      const result = await invoke("ping", {
-        message: "Hello from HTML"
-      });
+      body {
+        margin: 0;
+        min-height: 100vh;
+        font-family:
+          system-ui,
+          -apple-system,
+          BlinkMacSystemFont,
+          "Segoe UI",
+          sans-serif;
+        background:
+          radial-gradient(circle at top left, #1e3a8a 0, transparent 35%),
+          radial-gradient(circle at bottom right, #0f766e 0, transparent 30%),
+          var(--bg);
+        color: var(--text);
+      }
 
-      document.getElementById("output").textContent =
-        JSON.stringify(result, null, 2);
-    });
+      .app {
+        width: min(1100px, calc(100% - 32px));
+        margin: 0 auto;
+        padding: 40px 0;
+      }
 
-    document.getElementById("add").addEventListener("click", async () => {
-      const result = await invoke("add", {
-        a: 10,
-        b: 32
-      });
+      .header {
+        margin-bottom: 24px;
+      }
 
-      document.getElementById("output").textContent =
-        JSON.stringify(result, null, 2);
-    });
-  </script>
-</body>
+      .badge {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        padding: 6px 12px;
+        border: 1px solid var(--border);
+        border-radius: 999px;
+        background: rgba(15, 23, 42, 0.7);
+        color: var(--muted);
+        font-size: 14px;
+      }
+
+      h1 {
+        margin: 18px 0 8px;
+        font-size: clamp(32px, 5vw, 56px);
+        line-height: 1;
+      }
+
+      .subtitle {
+        margin: 0;
+        color: var(--muted);
+        font-size: 17px;
+      }
+
+      .grid {
+        display: grid;
+        grid-template-columns: 1.1fr 0.9fr;
+        gap: 20px;
+      }
+
+      @media (max-width: 850px) {
+        .grid {
+          grid-template-columns: 1fr;
+        }
+      }
+
+      .card {
+        border: 1px solid var(--border);
+        border-radius: 22px;
+        background: rgba(17, 24, 39, 0.86);
+        box-shadow: 0 20px 60px rgba(0, 0, 0, 0.35);
+        overflow: hidden;
+      }
+
+      .card-header {
+        padding: 20px 22px;
+        border-bottom: 1px solid var(--border);
+        background: rgba(31, 41, 55, 0.7);
+      }
+
+      .card-header h2 {
+        margin: 0;
+        font-size: 20px;
+      }
+
+      .card-header p {
+        margin: 6px 0 0;
+        color: var(--muted);
+        font-size: 14px;
+      }
+
+      .card-body {
+        padding: 22px;
+      }
+
+      .status-row {
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        gap: 12px;
+        margin-bottom: 18px;
+      }
+
+      @media (max-width: 650px) {
+        .status-row {
+          grid-template-columns: 1fr;
+        }
+      }
+
+      .status-box {
+        padding: 14px;
+        border-radius: 16px;
+        background: var(--panel-light);
+        border: 1px solid var(--border);
+      }
+
+      .status-label {
+        display: block;
+        margin-bottom: 5px;
+        color: var(--muted);
+        font-size: 13px;
+      }
+
+      .status-value {
+        font-weight: 700;
+      }
+
+      .ok {
+        color: var(--success);
+      }
+
+      .bad {
+        color: var(--error);
+      }
+
+      .warn {
+        color: var(--warning);
+      }
+
+      .buttons {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px;
+        margin-top: 16px;
+      }
+
+      button {
+        border: 0;
+        border-radius: 14px;
+        padding: 12px 16px;
+        background: var(--accent);
+        color: #082f49;
+        font-weight: 800;
+        cursor: pointer;
+        transition:
+          transform 0.12s ease,
+          filter 0.12s ease;
+      }
+
+      button:hover {
+        transform: translateY(-1px);
+        filter: brightness(1.08);
+      }
+
+      button.secondary {
+        background: #334155;
+        color: var(--text);
+      }
+
+      button.danger {
+        background: #ef4444;
+        color: #fff;
+      }
+
+      .form {
+        display: grid;
+        gap: 12px;
+      }
+
+      label {
+        color: var(--muted);
+        font-size: 14px;
+      }
+
+      input,
+      textarea {
+        width: 100%;
+        border: 1px solid var(--border);
+        border-radius: 14px;
+        padding: 12px 14px;
+        background: #020617;
+        color: var(--text);
+        font: inherit;
+        outline: none;
+      }
+
+      textarea {
+        min-height: 130px;
+        resize: vertical;
+        font-family:
+          ui-monospace,
+          SFMono-Regular,
+          Menlo,
+          Monaco,
+          Consolas,
+          "Liberation Mono",
+          monospace;
+      }
+
+      input:focus,
+      textarea:focus {
+        border-color: var(--accent);
+      }
+
+      .log {
+        display: grid;
+        gap: 10px;
+        max-height: 470px;
+        overflow: auto;
+        padding-right: 4px;
+      }
+
+      .log-entry {
+        border: 1px solid var(--border);
+        border-radius: 16px;
+        background: #020617;
+        overflow: hidden;
+      }
+
+      .log-title {
+        display: flex;
+        justify-content: space-between;
+        gap: 12px;
+        padding: 12px 14px;
+        border-bottom: 1px solid var(--border);
+        background: #0f172a;
+        font-weight: 800;
+      }
+
+      .log-title small {
+        color: var(--muted);
+        font-weight: 500;
+      }
+
+      pre {
+        margin: 0;
+        padding: 14px;
+        overflow: auto;
+        color: #d1d5db;
+        font-size: 13px;
+        line-height: 1.45;
+      }
+
+      .empty {
+        color: var(--muted);
+        text-align: center;
+        padding: 32px 12px;
+        border: 1px dashed var(--border);
+        border-radius: 18px;
+      }
+    </style>
+  </head>
+
+  <body>
+    <main class="app">
+      <section class="header">
+        <div class="badge">🧪 Taurino JS ↔ Rust IPC Test</div>
+        <h1>IPC Verbindung testen</h1>
+        <p class="subtitle">
+          Testet sauber, ob JavaScript über <code>window.__TAURINO__.core.invoke</code>
+          mit Rust sprechen kann.
+        </p>
+      </section>
+
+      <section class="grid">
+        <div class="card">
+          <div class="card-header">
+            <h2>Verbindungsstatus</h2>
+            <p>Diese Checks zeigen, ob die Runtime korrekt injiziert wurde.</p>
+          </div>
+
+          <div class="card-body">
+            <div class="status-row">
+              <div class="status-box">
+                <span class="status-label">window.__TAURINO__</span>
+                <span id="status-tauri" class="status-value warn">Prüfe...</span>
+              </div>
+
+              <div class="status-box">
+                <span class="status-label">core.invoke</span>
+                <span id="status-invoke" class="status-value warn">Prüfe...</span>
+              </div>
+
+              <div class="status-box">
+                <span class="status-label">Taurino Internals</span>
+                <span id="status-internals" class="status-value warn">Prüfe...</span>
+              </div>
+            </div>
+
+            <div class="buttons">
+              <button onclick="runPingTest()">Ping Test</button>
+              <button onclick="runAddTest()">Add Test 2 + 3</button>
+              <button class="secondary" onclick="checkRuntime()">Runtime prüfen</button>
+              <button class="danger" onclick="clearLog()">Log löschen</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-header">
+            <h2>Eigenen Command testen</h2>
+            <p>Hier kannst du später deine eigenen Rust-Commands testen.</p>
+          </div>
+
+          <div class="card-body">
+            <div class="form">
+              <div>
+                <label for="command-name">Command Name</label>
+                <input id="command-name" value="ping" />
+              </div>
+
+              <div>
+                <label for="command-payload">Payload JSON</label>
+                <textarea id="command-payload">{
+  "hello": "world"
+}</textarea>
+              </div>
+
+              <button onclick="runCustomCommand()">Command ausführen</button>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="card" style="margin-top: 20px">
+        <div class="card-header">
+          <h2>Antworten von Rust</h2>
+          <p>Erfolgreiche Antworten und Fehler erscheinen hier.</p>
+        </div>
+
+        <div class="card-body">
+          <div id="log" class="log">
+            <div class="empty">Noch kein Test ausgeführt.</div>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <script>
+      function getInvoke() {
+        return window.__TAURINO__ &&
+          window.__TAURINO__.core &&
+          typeof window.__TAURINO__.core.invoke === 'function'
+          ? window.__TAURINO__.core.invoke
+          : null
+      }
+
+      function setStatus(id, ok, text) {
+        const element = document.querySelector(id)
+
+        element.textContent = text
+        element.classList.remove('ok', 'bad', 'warn')
+        element.classList.add(ok ? 'ok' : 'bad')
+      }
+
+      function checkRuntime() {
+        const hasTaurino = typeof window.__TAURINO__ === 'object'
+        const hasInvoke = typeof getInvoke() === 'function'
+        const hasInternals = typeof window.__TAURINO_INTERNALS__ === 'object'
+
+        setStatus(
+          '#status-tauri',
+          hasTaurino,
+          hasTaurino ? 'Gefunden' : 'Fehlt'
+        )
+
+        setStatus(
+          '#status-invoke',
+          hasInvoke,
+          hasInvoke ? 'Bereit' : 'Fehlt'
+        )
+
+        setStatus(
+          '#status-internals',
+          hasInternals,
+          hasInternals ? 'Gefunden' : 'Fehlt'
+        )
+
+        addLog('Runtime Check', {
+          hasTaurino,
+          hasInvoke,
+          hasInternals,
+          tauri: window.__TAURINO__ || null,
+          taurinoInternals: window.__TAURINO_INTERNALS__ || null
+        }, hasInvoke ? 'success' : 'error')
+      }
+
+      async function invokeRust(commandName, payload) {
+        const invoke = getInvoke()
+
+        if (!invoke) {
+          throw new Error(
+            'window.__TAURINO__.core.invoke ist nicht verfügbar. Prüfe core.js, pattern.js und die Inject-Reihenfolge.'
+          )
+        }
+
+        return await invoke(commandName, payload)
+      }
+
+      async function runPingTest() {
+        await runTest('ping', {
+          hello: 'world',
+          time: new Date().toISOString()
+        })
+      }
+
+      async function runAddTest() {
+        await runTest('add', {
+          a: 2,
+          b: 3
+        })
+      }
+
+      async function runCustomCommand() {
+        const commandName = document.querySelector('#command-name').value.trim()
+        const payloadText = document.querySelector('#command-payload').value
+
+        if (!commandName) {
+          addLog('Fehler', 'Command Name darf nicht leer sein.', 'error')
+          return
+        }
+
+        let payload
+
+        try {
+          payload = JSON.parse(payloadText)
+        } catch (error) {
+          addLog('JSON Fehler', error.message, 'error')
+          return
+        }
+
+        await runTest(commandName, payload)
+      }
+
+      async function runTest(commandName, payload) {
+        addLog(`Sende: ${commandName}`, payload, 'info')
+
+        try {
+          const response = await invokeRust(commandName, payload)
+          addLog(`Antwort: ${commandName}`, response, 'success')
+        } catch (error) {
+          addLog(`Fehler: ${commandName}`, normalizeError(error), 'error')
+        }
+
+        checkRuntimeStatusOnly()
+      }
+
+      function checkRuntimeStatusOnly() {
+        const hasTauri = typeof window.__TAURINO__ === 'object'
+        const hasInvoke = typeof getInvoke() === 'function'
+        const hasInternals = typeof window.__TAURINO_INTERNALS__ === 'object'
+
+        setStatus('#status-tauri', hasTauri, hasTauri ? 'Gefunden' : 'Fehlt')
+        setStatus('#status-invoke', hasInvoke, hasInvoke ? 'Bereit' : 'Fehlt')
+        setStatus(
+          '#status-internals',
+          hasInternals,
+          hasInternals ? 'Gefunden' : 'Fehlt'
+        )
+      }
+
+      function normalizeError(error) {
+        if (error instanceof Error) {
+          return {
+            name: error.name,
+            message: error.message,
+            stack: error.stack
+          }
+        }
+
+        return error
+      }
+
+      function addLog(title, data, type) {
+        const log = document.querySelector('#log')
+        const empty = log.querySelector('.empty')
+
+        if (empty) {
+          empty.remove()
+        }
+
+        const entry = document.createElement('div')
+        entry.className = 'log-entry'
+
+        const header = document.createElement('div')
+        header.className = 'log-title'
+
+        const titleElement = document.createElement('span')
+        titleElement.textContent = title
+
+        if (type === 'success') {
+          titleElement.classList.add('ok')
+        } else if (type === 'error') {
+          titleElement.classList.add('bad')
+        } else {
+          titleElement.classList.add('warn')
+        }
+
+        const time = document.createElement('small')
+        time.textContent = new Date().toLocaleTimeString()
+
+        header.appendChild(titleElement)
+        header.appendChild(time)
+
+        const pre = document.createElement('pre')
+        pre.textContent =
+          typeof data === 'string'
+            ? data
+            : JSON.stringify(data, null, 2)
+
+        entry.appendChild(header)
+        entry.appendChild(pre)
+
+        log.prepend(entry)
+      }
+
+      function clearLog() {
+        const log = document.querySelector('#log')
+        log.innerHTML = '<div class="empty">Log wurde gelöscht.</div>'
+      }
+
+      window.addEventListener('DOMContentLoaded', () => {
+        setTimeout(checkRuntimeStatusOnly, 100)
+      })
+    </script>
+  </body>
 </html>
-
