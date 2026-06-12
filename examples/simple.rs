@@ -16,7 +16,7 @@ fn main() -> Result<()> {
     local_html_example()
 
     // Example 2: external websites.
-    // To test this example, keep this line enabled:
+    // To test this example, keep this line enabled: true
     /* external_url_example() */
 }
 
