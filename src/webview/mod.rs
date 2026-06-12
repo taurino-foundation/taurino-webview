@@ -617,6 +617,7 @@ impl Manager {
 
         self.prepare_pending_webview(pending, &label)
     }
+
     fn prepare_pending_webview(
         &mut self,
         mut pending: PendingWebview,
@@ -635,10 +636,14 @@ impl Manager {
             }
         }
 
+        // ---------------------------------------------------------------------
+        // Base runtime namespace
+        // ---------------------------------------------------------------------
         all_initialization_scripts.push(main_frame_script(
             r#"
         Object.defineProperty(window, 'isTaurino', {
             value: true,
+            configurable: true
         });
 
         if (!window.__TAURINO_INTERNALS__) {
@@ -653,6 +658,9 @@ impl Manager {
             .to_owned(),
         ));
 
+        // ---------------------------------------------------------------------
+        // Metadata
+        // ---------------------------------------------------------------------
         all_initialization_scripts.push(main_frame_script(format!(
             r#"
         Object.defineProperty(window.__TAURINO_INTERNALS__, 'metadata', {{
@@ -668,12 +676,21 @@ impl Manager {
             current_webview_label = serde_json::to_string(label)?,
         )));
 
+        // ---------------------------------------------------------------------
+        // Pattern script
+        // Important: this must also exist in Brownfield mode.
+        // ---------------------------------------------------------------------
         let pattern_script = PatternJavascript {
             pattern: self.config.pattern_ref().into(),
         }
         .render_default(&Default::default())?
         .into_string();
 
+        // ---------------------------------------------------------------------
+        // IPC script
+        // Important: this must also exist in Brownfield mode.
+        // Only isolation_origin is empty when isolation is disabled.
+        // ---------------------------------------------------------------------
         let isolation_origin = if isolation_active {
             match self.config.pattern_ref() {
                 Pattern::Isolation { schema, .. } => {
@@ -693,10 +710,11 @@ impl Manager {
         }
         .render_default(&Default::default())?
         .into_string();
-        // Inject the main runtime initialization script.
-        //
-        // In Brownfield mode, `pattern_script` and `ipc_script` are empty.
-        // In Isolation mode, they contain the required isolation runtime setup.
+
+        // ---------------------------------------------------------------------
+        // Main runtime initialization
+        // This must be injected exactly once.
+        // ---------------------------------------------------------------------
         all_initialization_scripts.push(main_frame_script(
             self.initialization_script(
                 &ipc_script,
@@ -705,7 +723,10 @@ impl Manager {
             )?,
         ));
 
-        // Inject the isolation iframe bootstrap only when isolation is active.
+        // ---------------------------------------------------------------------
+        // Optional isolation iframe
+        // This must also be injected only once.
+        // ---------------------------------------------------------------------
         if isolation_active {
             if let Pattern::Isolation { schema, .. } = self.config.pattern_ref()
             {
@@ -726,40 +747,18 @@ impl Manager {
             }
         }
 
-        all_initialization_scripts.push(main_frame_script(
-            self.initialization_script(
-                &ipc_script,
-                &pattern_script,
-                use_https_scheme,
-            )?,
-        ));
-
-        if isolation_active {
-            if let Pattern::Isolation { schema, .. } = self.config.pattern_ref()
-            {
-                let isolation_src =
-                    crate::protocol::pattern::format_real_schema(
-                        schema,
-                        use_https_scheme,
-                    );
-
-                all_initialization_scripts.push(main_frame_script(
-                IsolationJavascript {
-                    isolation_src: &isolation_src,
-                    style: "position: fixed; top: 0; left: 0; width: 100%; height: 100%; border: 0;",
-                }
-                .render_default(&Default::default())?
-                .into_string(),
-            ));
-            }
-        }
-
+        // ---------------------------------------------------------------------
+        // User scripts after framework scripts
+        // ---------------------------------------------------------------------
         all_initialization_scripts
             .extend(pending.webview_attributes.initialization_scripts);
 
         pending.webview_attributes.initialization_scripts =
             all_initialization_scripts;
 
+        // ---------------------------------------------------------------------
+        // Register custom protocols
+        // ---------------------------------------------------------------------
         let protocols = self.registered_uri_scheme_protocols();
         let mut registered_scheme_protocols = HashSet::new();
 
@@ -785,6 +784,9 @@ impl Manager {
             );
         }
 
+        // ---------------------------------------------------------------------
+        // Register built-in protocols
+        // ---------------------------------------------------------------------
         let window_url =
             Url::parse(&pending.url).map_err(crate::Error::InvalidUrl)?;
 
