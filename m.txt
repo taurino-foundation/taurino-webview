@@ -1,0 +1,2435 @@
+
+
+core.js(;(function () {
+  function uid() {
+    return window.crypto.getRandomValues(new Uint32Array(1))[0]
+  }
+
+  const osName = __TEMPLATE_os_name__
+  const protocolScheme = __TEMPLATE_protocol_scheme__
+
+  Object.defineProperty(window.__TAURINO_INTERNALS__, 'convertFileSrc', {
+    value: function (filePath, protocol = 'asset') {
+      const path = encodeURIComponent(filePath)
+      return osName === 'windows' || osName === 'android'
+        ? `${protocolScheme}://${protocol}.localhost/${path}`
+        : `${protocol}://localhost/${path}`
+    }
+  })
+
+  const callbacks = new Map()
+
+  function registerCallback(callback, once) {
+    const identifier = uid()
+    callbacks.set(identifier, (data) => {
+      if (once) {
+        unregisterCallback(identifier)
+      }
+      return callback && callback(data)
+    })
+    return identifier
+  }
+
+  function unregisterCallback(id) {
+    callbacks.delete(id)
+  }
+
+  function runCallback(id, data) {
+    const callback = callbacks.get(id)
+    if (callback) {
+      callback(data)
+    } else {
+      console.warn(
+        `[TAURI] Couldn't find callback id ${id}. This might happen when the app is reloaded while Rust is running an asynchronous operation.`
+      )
+    }
+  }
+
+  // Maybe let's rename it to `registerCallback`?
+  Object.defineProperty(window.__TAURINO_INTERNALS__, 'transformCallback', {
+    value: registerCallback
+  })
+
+  Object.defineProperty(window.__TAURINO_INTERNALS__, 'unregisterCallback', {
+    value: unregisterCallback
+  })
+
+  Object.defineProperty(window.__TAURINO_INTERNALS__, 'runCallback', {
+    value: runCallback
+  })
+
+  // This is just for the debugging purposes
+  Object.defineProperty(window.__TAURINO_INTERNALS__, 'callbacks', {
+    value: callbacks
+  })
+
+  const ipcQueue = []
+  let isWaitingForIpc = false
+
+  function waitForIpc() {
+    if ('ipc' in window.__TAURINO_INTERNALS__) {
+      for (const action of ipcQueue) {
+        action()
+      }
+    } else {
+      setTimeout(waitForIpc, 50)
+    }
+  }
+
+  Object.defineProperty(window.__TAURINO_INTERNALS__, 'invoke', {
+    value: function (cmd, payload = {}, options) {
+      return new Promise(function (resolve, reject) {
+        const callback = registerCallback((r) => {
+          resolve(r)
+          unregisterCallback(error)
+        }, true)
+        const error = registerCallback((e) => {
+          reject(e)
+          unregisterCallback(callback)
+        }, true)
+
+        const action = () => {
+          window.__TAURINO_INTERNALS__.ipc({
+            cmd,
+            callback,
+            error,
+            payload,
+            options
+          })
+        }
+        if ('ipc' in window.__TAURINO_INTERNALS__) {
+          action()
+        } else {
+          ipcQueue.push(action)
+          if (!isWaitingForIpc) {
+            waitForIpc()
+            isWaitingForIpc = true
+          }
+        }
+      })
+    }
+  })
+})())
+freeze_prototype.js(Object.freeze(Object.prototype))
+init.js(;(function () {
+  __RAW_freeze_prototype__
+
+  __RAW_pattern_script__
+
+  __RAW_ipc_script__
+
+  __RAW_core_script__
+
+  __RAW_event_initialization_script__
+})())
+ipc-protocol.js(;(function () {
+  /**
+   * A runtime generated key to ensure an IPC call comes from an initialized frame.
+   *
+   * This is declared outside the `window.__TAURINO_INVOKE__` definition to prevent
+   * the key from being leaked by `window.__TAURINO_INVOKE__.toString()`.
+   */
+  const __TAURINO_INVOKE_KEY__ = __TEMPLATE_invoke_key__
+
+  const processIpcMessage = __RAW_process_ipc_message_fn__
+  const osName = __TEMPLATE_os_name__
+  const fetchChannelDataCommand = __TEMPLATE_fetch_channel_data_command__
+  let customProtocolIpcFailed = false
+
+  // on Android we never use it because Android does not have support to reading the request body
+  const canUseCustomProtocol = osName !== 'android'
+
+  function sendIpcMessage(message) {
+    const { cmd, callback, error, payload, options } = message
+
+    if (
+      !customProtocolIpcFailed
+      && (canUseCustomProtocol || cmd === fetchChannelDataCommand)
+    ) {
+      const { contentType, data } = processIpcMessage(payload)
+
+      const headers = new Headers((options && options.headers) || {})
+      headers.set('Content-Type', contentType)
+      headers.set('Taurino-Callback', callback)
+      headers.set('Taurino-Error', error)
+      headers.set('Taurino-Invoke-Key', __TAURINO_INVOKE_KEY__)
+
+      fetch(window.__TAURINO_INTERNALS__.convertFileSrc(cmd, 'ipc'), {
+        method: 'POST',
+        body: data,
+        headers
+      })
+        .then((response) => {
+          const callbackId =
+            response.headers.get('Taurino-Response') === 'ok' ? callback : error
+          // we need to split here because on Android the content-type gets duplicated
+          switch ((response.headers.get('content-type') || '').split(',')[0]) {
+            case 'application/json':
+              return response.json().then((r) => [callbackId, r])
+            case 'text/plain':
+              return response.text().then((r) => [callbackId, r])
+            default:
+              return response.arrayBuffer().then((r) => [callbackId, r])
+          }
+        })
+        .then(
+          ([callbackId, data]) => {
+            window.__TAURINO_INTERNALS__.runCallback(callbackId, data)
+          },
+          (e) => {
+            console.warn(
+              'IPC custom protocol failed, Tauri will now use the postMessage interface instead',
+              e
+            )
+            // failed to use the custom protocol IPC (either the webview blocked a custom protocol or it was a CSP error)
+            // so we need to fallback to the postMessage interface
+            customProtocolIpcFailed = true
+            sendIpcMessage(message)
+          }
+        )
+    } else {
+      // otherwise use the postMessage interface
+      const { data } = processIpcMessage({
+        cmd,
+        callback,
+        error,
+        options: {
+          ...options,
+          customProtocolIpcBlocked: customProtocolIpcFailed
+        },
+        payload,
+        __TAURINO_INVOKE_KEY__
+      })
+      // `window.ipc.postMessage` came from `taurino-runtime-wry` > `wry` [`with_ipc_handler`](https://github.com/taurino-apps/wry/blob/a0403b9e2f1ff9d73be7dce1184f058afcaa1d82/src/lib.rs#L1130)
+      window.ipc.postMessage(data)
+    }
+  }
+
+  Object.defineProperty(window.__TAURINO_INTERNALS__, 'postMessage', {
+    value: sendIpcMessage
+  })
+})())
+ipc.js(
+/**
+ * @typedef {{callback: string, error: string, data: *}} IsolationPayload - a valid isolation payload
+ */
+
+;(function () {
+  /**
+   * @type {string}
+   */
+  const pattern = window.__TAURINO_INTERNALS__.__TAURINO_PATTERN__.pattern
+
+  /**
+   * @type {string}
+   */
+  const isolationOrigin = __TEMPLATE_isolation_origin__
+
+  /**
+   * @type {{queue: object[], ready: boolean, frame: HTMLElement | null}}
+   */
+  const isolation = Object.create(null)
+  isolation.queue = []
+  isolation.ready = false
+  isolation.frame = null
+
+  /**
+   * Detects if a message event is a valid isolation message.
+   *
+   * @param {MessageEvent<object>} event - a message event that is expected to be an isolation message
+   * @return {boolean} - if the event was a valid isolation message
+   */
+  function isIsolationMessage(event) {
+    if (
+      typeof event.data === 'object'
+      && typeof event.data.payload === 'object'
+    ) {
+      const keys = Object.keys(event.data.payload || {})
+      return (
+        keys.length > 0
+        && keys.every(
+          (key) => key === 'contentType' || key === 'nonce' || key === 'payload'
+        )
+      )
+    }
+    return false
+  }
+
+  /**
+   * Detects if data is able to transform into an isolation payload.
+   *
+   * @param {object} data - object that is expected to contain at least a callback and error identifier
+   * @return {boolean} - if the data is able to transform into an isolation payload
+   */
+  function isIsolationPayload(data) {
+    return (
+      typeof data === 'object'
+      && 'callback' in data
+      && 'error' in data
+      && !isIsolationMessage(data)
+    )
+  }
+
+  /**
+   * Sends a properly formatted message to the isolation frame.
+   *
+   * @param {IsolationPayload} data - data that has been validated to be an isolation payload
+   */
+  function sendIsolationMessage(data) {
+    // set the frame dom element if it's not been set before
+    if (!isolation.frame) {
+      const frame = document.querySelector('iframe#__taurino_isolation__')
+      if (frame.src.startsWith(isolationOrigin)) {
+        isolation.frame = frame
+      } else {
+        console.error(
+          'Tauri IPC found an isolation iframe, but it had the wrong origin'
+        )
+      }
+    }
+
+    // ensure we have the target to send the message to
+    if (!isolation.frame || !isolation.frame.contentWindow) {
+      console.error(
+        'Tauri "Isolation" Pattern could not find the Isolation iframe window'
+      )
+      return
+    }
+
+    // `postMessage` uses `structuredClone` to serialize the data before sending it
+    // unlike `JSON.stringify`, we can't extend a type with a method similar to `toJSON`
+    // so that `structuredClone` would use, so until https://github.com/whatwg/html/issues/7428
+    // we manually call `toIPC`
+    function serializeIpcPayload(data) {
+      // if this value changes, make sure to update it in:
+      // 1. process-ipc-message-fn.js
+      // 2. core.ts
+      const SERIALIZE_TO_IPC_FN = '__TAURINO_TO_IPC_KEY__'
+
+      if (
+        typeof data === 'object'
+        && data !== null
+        && 'constructor' in data
+        && data.constructor === Array
+      ) {
+        return data.map((v) => serializeIpcPayload(v))
+      }
+
+      if (
+        typeof data === 'object'
+        && data !== null
+        && SERIALIZE_TO_IPC_FN in data
+      ) {
+        return data[SERIALIZE_TO_IPC_FN]()
+      }
+
+      if (
+        typeof data === 'object'
+        && data !== null
+        && 'constructor' in data
+        && data.constructor === Object
+      ) {
+        const acc = {}
+        Object.entries(data).forEach(([k, v]) => {
+          acc[k] = serializeIpcPayload(v)
+        })
+        return acc
+      }
+
+      return data
+    }
+
+    data.payload = serializeIpcPayload(data.payload)
+
+    isolation.frame.contentWindow.postMessage(
+      data,
+      '*' /* todo: set this to the secure origin */
+    )
+  }
+
+  Object.defineProperty(window.__TAURINO_INTERNALS__, 'ipc', {
+    // todo: JSDoc this function
+    value: Object.freeze((message) => {
+      switch (pattern) {
+        case 'brownfield':
+          window.__TAURINO_INTERNALS__.postMessage(message)
+          break
+
+        case 'isolation':
+          if (!isIsolationPayload(message)) {
+            console.error(
+              'Tauri "Isolation" Pattern found an invalid isolation message payload',
+              message
+            )
+            break
+          }
+
+          if (isolation.ready) {
+            sendIsolationMessage(message)
+          } else {
+            isolation.queue.push(message)
+          }
+
+          break
+
+        case 'error':
+          console.error(
+            'Tauri IPC found a Tauri Pattern, but it was an error. Check for other log messages to find the cause.'
+          )
+          break
+
+        default:
+          console.error(
+            'Tauri IPC did not find a Tauri Pattern that it understood.'
+          )
+          break
+      }
+    })
+  })
+
+  /**
+   * IMPORTANT: See isolation_secure.js for the isolation frame implementation.
+   * main frame -> isolation frame = isolation payload
+   * isolation frame -> main frame = isolation message
+   */
+  if (pattern === 'isolation') {
+    window.addEventListener(
+      'message',
+      (event) => {
+        // watch for the isolation frame being ready and flush any queued messages
+        if (event.data === '__TAURINO_ISOLATION_READY__') {
+          isolation.ready = true
+
+          for (const message of isolation.queue) {
+            sendIsolationMessage(message)
+          }
+
+          isolation.queue = []
+          return
+        }
+
+        if (isIsolationMessage(event)) {
+          window.__TAURINO_INTERNALS__.postMessage(event.data)
+        }
+      },
+      false
+    )
+  }
+})())
+isolation.js(if (location.href !== __TEMPLATE_isolation_src__) {
+  window.addEventListener('DOMContentLoaded', () => {
+    let style = document.createElement('style')
+    style.textContent = __TEMPLATE_style__
+    document.head.append(style)
+
+    let iframe = document.createElement('iframe')
+    iframe.id = '__taurino_isolation__'
+    iframe.sandbox.add('allow-scripts')
+    iframe.src = __TEMPLATE_isolation_src__
+    document.body.append(iframe)
+  })
+})
+pattern.js(
+;(function () {
+  function __tauriDeepFreeze(object) {
+    const props = Object.getOwnPropertyNames(object)
+
+    for (const prop of props) {
+      if (typeof object[prop] === 'object') {
+        __tauriDeepFreeze(object[prop])
+      }
+    }
+
+    return Object.freeze(object)
+  }
+
+  Object.defineProperty(window.__TAURI_INTERNALS__, '__TAURINO_PATTERN__', {
+    value: __tauriDeepFreeze(__TEMPLATE_pattern__)
+  })
+})())
+process-ipc-message-fn.js(// Copyright 2019-2024 Tauri Programme within The Commons Conservancy
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-License-Identifier: MIT
+
+// this is a function and not an iife so use it carefully
+
+(function (message) {
+  if (
+    message instanceof ArrayBuffer
+    || ArrayBuffer.isView(message)
+    || Array.isArray(message)
+  ) {
+    return {
+      contentType: 'application/octet-stream',
+      data: message
+    }
+  } else {
+    const data = JSON.stringify(message, (_k, val) => {
+      // if this value changes, make sure to update it in:
+      // 1. ipc.js
+      // 2. core.ts
+      const SERIALIZE_TO_IPC_FN = '__TAURINO_TO_IPC_KEY__'
+
+      if (val instanceof Map) {
+        return Object.fromEntries(val.entries())
+      } else if (val instanceof Uint8Array) {
+        return Array.from(val)
+      } else if (val instanceof ArrayBuffer) {
+        return Array.from(new Uint8Array(val))
+      } else if (
+        typeof val === 'object'
+        && val !== null
+        && SERIALIZE_TO_IPC_FN in val
+      ) {
+        return val[SERIALIZE_TO_IPC_FN]()
+      } else {
+        return val
+      }
+    })
+
+    return {
+      contentType: 'application/json',
+      data
+    }
+  }
+}))
+
+
+
+manager.rs(pub mod attributes;
+pub mod builder;
+pub mod factory;
+pub mod layout;
+pub mod pending;
+pub mod webview;
+
+use std::{
+    borrow::Cow,
+    collections::{HashMap, HashSet},
+    path::PathBuf,
+    sync::{
+        Arc, Mutex, MutexGuard,
+        atomic::{AtomicU32, Ordering},
+    },
+};
+
+use dpi::{LogicalPosition, LogicalSize};
+use http::{
+    Method, Response, StatusCode,
+    header::{
+        ACCESS_CONTROL_ALLOW_HEADERS, ACCESS_CONTROL_ALLOW_METHODS,
+        ACCESS_CONTROL_ALLOW_ORIGIN, CONTENT_TYPE,
+    },
+};
+use serialize_to_javascript::{DefaultTemplate, Template, default_template};
+use tao::window::WindowId;
+use url::Url;
+
+use crate::{
+    protocol::{
+        self,
+        pattern::{Pattern, PatternJavascript},
+    },
+    utils::{
+        ManagerUriSchemeContext, ManagerUriSchemeProtocol,
+        ManagerUriSchemeResponder, WebContextStore, is_local_network_url,
+        types::{FrontendDist, WebviewUrl},
+    },
+};
+use crate::{
+    webview::{
+        attributes::InitializationScript,
+        factory::create_wry_webview,
+        pending::PendingWebview,
+        webview::{WebView, WebviewId},
+    },
+    window::Window,
+};
+
+const ONLY_POST_ERROR: &[u8] =
+    br#"{"ok":false,"error":"Only POST is allowed"}"#;
+
+const APP_PROTOCOL: &str = "taurino";
+const IPC_PROTOCOL: &str = "ipc";
+
+#[allow(dead_code)]
+pub(crate) const PROCESS_IPC_MESSAGE_FN: &str =
+    include_str!("../../scripts/process-ipc-message-fn.js");
+
+#[allow(dead_code)]
+#[derive(Template)]
+#[default_template("../../scripts/isolation.js")]
+pub(crate) struct IsolationJavascript<'a> {
+    pub(crate) isolation_src: &'a str,
+    pub(crate) style: &'a str,
+}
+
+#[allow(dead_code)]
+#[derive(Template)]
+#[default_template("../../scripts/ipc.js")]
+pub(crate) struct IpcJavascript<'a> {
+    pub(crate) isolation_origin: &'a str,
+}
+
+/// Runtime configuration for the webview manager.
+///
+/// This configuration controls how webviews are initialized, which frontend
+/// source is used, whether isolation is enabled, and which JavaScript runtime
+/// bootstrap scripts are injected into each webview.
+///
+/// The configuration is designed to be Python-friendly:
+/// Python can decide whether isolation should be enabled and can provide
+/// isolation assets as raw bytes at runtime.
+pub struct ManagerConfig {
+    /// Enables or disables the isolation runtime.
+    ///
+    /// This is an explicit runtime option. It decides whether isolation-related
+    /// JavaScript and protocols should be installed.
+    ///
+    /// Important:
+    /// `Pattern::Isolation` stores the isolation data, but this flag decides
+    /// whether that data is actually used.
+    isolation_enabled: bool,
+
+    /// Enables prototype freezing in the injected JavaScript runtime.
+    ///
+    /// When enabled, the runtime may inject JavaScript that freezes selected
+    /// prototypes to reduce prototype-pollution risks.
+    freeze_prototype: bool,
+
+    /// The current application pattern.
+    ///
+    /// `Pattern::Brownfield` represents the normal application mode.
+    /// `Pattern::Isolation` contains the runtime isolation assets and metadata.
+    ///
+    /// The pattern alone does not activate isolation. Isolation is active only
+    /// when `isolation_enabled == true` and this field is `Pattern::Isolation`.
+    pattern: Arc<Pattern>,
+
+    /// Indicates whether a native webview runtime is available on the system.
+    ///
+    /// This is detected by checking `wry::webview_version()`.
+    webview_runtime_installed: bool,
+
+    /// JavaScript used to initialize the invoke system.
+    ///
+    /// This script is injected into the webview as part of the runtime bootstrap.
+    invoke_initialization_script: String,
+
+    /// Runtime-generated invoke key.
+    ///
+    /// This key can be used to protect internal invoke calls.
+    pub(crate) invoke_key: String,
+
+    /// Defines where the frontend is loaded from.
+    ///
+    /// This can be a development server URL, a static directory, a list of files,
+    /// or `None`, in which case the internal application protocol is used.
+    frontend_dist: Option<FrontendDist>,
+
+    /// Shared web context storage.
+    ///
+    /// This is used to manage persistent webview context data.
+    web_context: WebContextStore,
+}
+
+impl ManagerConfig {
+    /// Creates a new manager configuration using default values.
+    pub fn new() -> crate::Result<Self> {
+        Ok(Self::default())
+    }
+
+    // ---------------------------------------------------------------------
+    // State checks
+    // ---------------------------------------------------------------------
+
+    /// Returns whether isolation was explicitly enabled in the configuration.
+    ///
+    /// This only reflects the option value. It does not guarantee that a valid
+    /// `Pattern::Isolation` is currently configured.
+    pub fn is_isolation_enabled(&self) -> bool {
+        self.isolation_enabled
+    }
+
+    /// Returns whether isolation is fully active.
+    ///
+    /// Isolation is active only when:
+    ///
+    /// - the isolation option is enabled
+    /// - the configured pattern is `Pattern::Isolation`
+    ///
+    /// Use this method before injecting isolation JavaScript or registering the
+    /// isolation protocol.
+    pub fn is_isolation_active(&self) -> bool {
+        self.isolation_enabled
+            && matches!(self.pattern.as_ref(), Pattern::Isolation { .. })
+    }
+
+    /// Returns whether prototype freezing is enabled.
+    pub fn freeze_prototype(&self) -> bool {
+        self.freeze_prototype
+    }
+
+    /// Returns whether the system webview runtime is installed.
+    pub fn webview_runtime_installed(&self) -> bool {
+        self.webview_runtime_installed
+    }
+
+    // ---------------------------------------------------------------------
+    // Accessors
+    // ---------------------------------------------------------------------
+
+    /// Returns a cloned reference-counted handle to the current pattern.
+    pub fn pattern(&self) -> Arc<Pattern> {
+        Arc::clone(&self.pattern)
+    }
+
+    /// Returns a borrowed reference to the current pattern.
+    ///
+    /// Prefer this method when cloning the `Arc` is not required.
+    pub fn pattern_ref(&self) -> &Pattern {
+        self.pattern.as_ref()
+    }
+
+    /// Returns the invoke initialization script.
+    pub fn invoke_initialization_script(&self) -> &str {
+        &self.invoke_initialization_script
+    }
+
+    /// Returns the runtime invoke key.
+    #[allow(dead_code)]
+    pub(crate) fn invoke_key(&self) -> &str {
+        &self.invoke_key
+    }
+
+    /// Returns the configured frontend distribution source.
+    pub fn frontend_dist(&self) -> Option<&FrontendDist> {
+        self.frontend_dist.as_ref()
+    }
+
+    /// Returns the configured frontend resource path.
+    ///
+    /// This is an internal alias used by the protocol layer.
+    pub(crate) fn resource_path(&self) -> Option<&FrontendDist> {
+        self.frontend_dist.as_ref()
+    }
+
+    /// Returns the shared web context store.
+    pub(crate) fn web_context(&self) -> &WebContextStore {
+        &self.web_context
+    }
+
+    // ---------------------------------------------------------------------
+    // Pattern and isolation configuration
+    // ---------------------------------------------------------------------
+
+    /// Enables or disables the isolation option.
+    ///
+    /// Disabling isolation also resets the pattern to `Pattern::Brownfield`
+    /// to avoid stale isolation assets being used accidentally.
+    ///
+    /// Enabling isolation does not create isolation assets automatically.
+    /// Use `set_isolation_html` or `set_isolation_assets` for that.
+    #[must_use]
+    pub fn set_isolation_enabled(mut self, enabled: bool) -> Self {
+        self.isolation_enabled = enabled;
+
+        if !enabled {
+            self.pattern = Arc::new(Pattern::Brownfield);
+        }
+
+        self
+    }
+
+    /// Configures the manager for normal Brownfield mode.
+    ///
+    /// This disables isolation and resets the pattern to `Pattern::Brownfield`.
+    #[must_use]
+    pub fn set_brownfield(mut self) -> Self {
+        self.isolation_enabled = false;
+        self.pattern = Arc::new(Pattern::Brownfield);
+        self
+    }
+
+    /// Sets the raw application pattern without changing the isolation option.
+    ///
+    /// This is useful for advanced internal use cases.
+    ///
+    /// For Python-facing APIs, prefer `set_brownfield`, `set_isolation_html`,
+    /// or `set_isolation_assets`, because those methods keep the option state
+    /// and the pattern state consistent.
+    #[must_use]
+    pub fn set_pattern(mut self, pattern: Arc<Pattern>) -> Self {
+        self.pattern = pattern;
+        self
+    }
+
+    /// Enables isolation and creates an isolation pattern from a single HTML file.
+    ///
+    /// This is the recommended Python-facing entry point for simple isolation
+    /// setups where Python provides the isolation page as raw bytes.
+    ///
+    /// Python example:
+    ///
+    /// ```python
+    /// config.set_isolation_html(b"<html>...</html>")
+    /// ```
+    #[must_use]
+    pub fn set_isolation_html<B>(mut self, html: B) -> Self
+    where
+        B: Into<Vec<u8>>,
+    {
+        self.isolation_enabled = true;
+        self.pattern = Arc::new(Pattern::isolation_from_html(html));
+        self
+    }
+
+    /// Enables isolation and creates an isolation pattern from multiple assets.
+    ///
+    /// The asset map uses normalized web paths as keys and raw file contents
+    /// as values.
+    ///
+    /// Python example:
+    ///
+    /// ```python
+    /// config.set_isolation_assets({
+    ///     "index.html": b"<html></html>",
+    ///     "main.js": b"console.log('hello')",
+    ///     "style.css": b"body { margin: 0 }",
+    /// })
+    /// ```
+    #[must_use]
+    pub fn set_isolation_assets(
+        mut self,
+        assets: HashMap<String, Vec<u8>>,
+    ) -> Self {
+        self.isolation_enabled = true;
+        self.pattern = Arc::new(Pattern::isolation_from_bytes_map(assets));
+        self
+    }
+
+    // ---------------------------------------------------------------------
+    // Runtime configuration
+    // ---------------------------------------------------------------------
+
+    /// Enables or disables prototype freezing.
+    #[must_use]
+    pub fn set_freeze_prototype(mut self, value: bool) -> Self {
+        self.freeze_prototype = value;
+        self
+    }
+
+    /// Overrides whether the webview runtime is considered installed.
+    ///
+    /// This is mostly useful for tests or custom runtime checks.
+    #[must_use]
+    pub fn set_webview_runtime_installed(mut self, value: bool) -> Self {
+        self.webview_runtime_installed = value;
+        self
+    }
+
+    /// Sets the JavaScript used to initialize the invoke system.
+    #[must_use]
+    pub fn set_invoke_initialization_script<S>(mut self, script: S) -> Self
+    where
+        S: Into<String>,
+    {
+        self.invoke_initialization_script = script.into();
+        self
+    }
+
+    /// Sets the runtime invoke key.
+    #[allow(dead_code)]
+    pub(crate) fn set_invoke_key<S>(mut self, key: S) -> Self
+    where
+        S: Into<String>,
+    {
+        self.invoke_key = key.into();
+        self
+    }
+
+    /// Sets the shared web context store.
+    #[must_use]
+    pub fn set_web_context(mut self, web_context: WebContextStore) -> Self {
+        self.web_context = web_context;
+        self
+    }
+
+    // ---------------------------------------------------------------------
+    // Frontend source configuration
+    // ---------------------------------------------------------------------
+
+    /// Sets the frontend distribution source.
+    #[must_use]
+    pub fn set_frontend_dist(mut self, frontend_dist: FrontendDist) -> Self {
+        self.frontend_dist = Some(frontend_dist);
+        self
+    }
+
+    /// Clears the frontend distribution source.
+    ///
+    /// When no frontend distribution is configured, the manager falls back to
+    /// the internal application protocol.
+    #[must_use]
+    pub fn clear_frontend_dist(mut self) -> Self {
+        self.frontend_dist = None;
+        self
+    }
+
+    /// Configures a development server URL as the frontend source.
+    ///
+    /// This is useful during development when the frontend is served by tools
+    /// such as Vite, Next.js, Vue CLI, or another local web server.
+    pub fn with_dev_server_url(mut self, url: &str) -> crate::Result<Self> {
+        let url = Url::parse(url).map_err(crate::Error::InvalidUrl)?;
+        self.frontend_dist = Some(FrontendDist::Url(url));
+        Ok(self)
+    }
+
+    /// Configures a static directory as the frontend source.
+    #[must_use]
+    pub fn set_static_dir<P>(mut self, path: P) -> Self
+    where
+        P: Into<PathBuf>,
+    {
+        self.frontend_dist = Some(FrontendDist::Directory(path.into()));
+        self
+    }
+
+    /// Configures a list of static frontend files as the frontend source.
+    #[must_use]
+    pub fn set_static_files(mut self, files: Vec<PathBuf>) -> Self {
+        self.frontend_dist = Some(FrontendDist::Files(files));
+        self
+    }
+}
+
+impl Default for ManagerConfig {
+    fn default() -> Self {
+        Self {
+            isolation_enabled: false,
+            freeze_prototype: false,
+            pattern: Arc::new(Pattern::Brownfield),
+            webview_runtime_installed: wry::webview_version().is_ok(),
+            invoke_initialization_script: String::new(),
+            invoke_key: String::new(),
+            frontend_dist: None,
+            web_context: WebContextStore::default(),
+        }
+    }
+}
+pub struct Manager {
+    pub(crate) config: ManagerConfig,
+    pub(crate) window_label: Arc<str>,
+    pub window_id: Arc<Mutex<Option<WindowId>>>,
+
+    pub webviews: Arc<Mutex<HashMap<String, WebView>>>,
+
+    pub(crate) uri_scheme_protocols:
+        Mutex<HashMap<String, Arc<ManagerUriSchemeProtocol>>>,
+
+    next_webview_id: Arc<AtomicU32>,
+    next_webview_event_id: Arc<AtomicU32>,
+}
+
+impl Manager {
+    pub fn new() -> crate::Result<Self> {
+        Ok(Self {
+            config: ManagerConfig::default(),
+            window_label: Arc::from("main"),
+            window_id: Arc::new(Mutex::new(None)),
+            webviews: Arc::new(Mutex::new(HashMap::new())),
+            uri_scheme_protocols: Mutex::new(HashMap::new()),
+            next_webview_id: Arc::new(AtomicU32::new(0)),
+            next_webview_event_id: Arc::new(AtomicU32::new(0)),
+        })
+    }
+
+    pub fn set_manager_config(mut self, config: ManagerConfig) -> Self {
+        self.config = config.into();
+        self
+    }
+
+    pub fn set_window_label<S>(mut self, window_label: S) -> Self
+    where
+        S: Into<Arc<str>>,
+    {
+        self.window_label = window_label.into();
+        self
+    }
+
+    pub fn set_window_id(self, window_id: WindowId) -> Self {
+        *self.window_id.lock().expect("poisoned window id manager") =
+            Some(window_id);
+
+        self
+    }
+
+    pub(crate) fn next_webview_id(&self) -> WebviewId {
+        self.next_webview_id.fetch_add(1, Ordering::Relaxed)
+    }
+
+    pub(crate) fn next_webview_event_id(&self) -> u32 {
+        self.next_webview_event_id.fetch_add(1, Ordering::Relaxed)
+    }
+
+    /// Get a locked handle to the webviews.
+    pub(crate) fn webviews_lock(
+        &self,
+    ) -> MutexGuard<'_, HashMap<String, WebView>> {
+        self.webviews.lock().expect("poisoned webview manager")
+    }
+
+    pub(crate) fn webviews_store(
+        &self,
+    ) -> Arc<Mutex<HashMap<String, WebView>>> {
+        Arc::clone(&self.webviews)
+    }
+
+    /// Get the base app URL.
+    ///
+    /// - If `frontend_dist` is an URL, this URL is returned.
+    /// - Otherwise the custom app protocol URL is returned.
+    pub(crate) fn get_app_url(&self, https: bool) -> Cow<'_, Url> {
+        match self.config.resource_path() {
+            Some(FrontendDist::Url(url)) => Cow::Borrowed(url),
+            _ => {
+                let url = self.taurino_protocol_url(https);
+                println!("current Render Url: {:?}", url);
+                url
+            }
+        }
+    }
+    /// The custom protocol URL used to serve embedded assets.
+    ///
+    /// Returns:
+    /// - `taurino://localhost`
+    /// - or on Windows/Android:
+    ///   - `http://taurino.localhost`
+    ///   - `https://taurino.localhost`
+    pub(crate) fn taurino_protocol_url(&self, https: bool) -> Cow<'_, Url> {
+        if cfg!(windows) || cfg!(target_os = "android") {
+            let scheme = if https { "https" } else { "http" };
+            let url = format!("{scheme}://{APP_PROTOCOL}.localhost");
+
+            Cow::Owned(Url::parse(&url).expect("invalid taurino localhost URL"))
+        } else {
+            Cow::Owned(
+                Url::parse(&format!("{APP_PROTOCOL}://localhost"))
+                    .expect("invalid taurino protocol URL"),
+            )
+        }
+    }
+
+    pub fn register_uri_scheme_protocol<N>(
+        &self,
+        uri_scheme: N,
+        protocol: Arc<ManagerUriSchemeProtocol>,
+    ) where
+        N: Into<String>,
+    {
+        let uri_scheme = uri_scheme.into();
+
+        self.uri_scheme_protocols
+            .lock()
+            .expect("poisoned URI scheme protocol manager")
+            .insert(uri_scheme, protocol);
+    }
+
+    fn prepare_webview(
+        &mut self,
+        mut pending: PendingWebview,
+    ) -> crate::Result<PendingWebview> {
+        // Ensure that each webview label is unique within this manager.
+        if self.webviews_lock().contains_key(&pending.label) {
+            return Err(crate::Error::WebviewLabelAlreadyExists(pending.label));
+        }
+
+        let label = pending.label.clone();
+        let use_https_scheme = pending.webview_attributes.use_https_scheme;
+
+        // Resolve the final URL that should be loaded by the webview.
+        //
+        // App URLs are resolved against the configured frontend source.
+        // External URLs are preserved unless they point to the local app server,
+        // in which case they are mapped to the internal application protocol.
+        let mut url = match &pending.webview_attributes.url {
+            WebviewUrl::App(path) => {
+                let app_url = self.get_app_url(use_https_scheme);
+
+                let base_url = if is_local_network_url(&app_url) {
+                    Cow::Owned(
+                        Url::parse("taurino://localhost")
+                            .expect("invalid internal application URL"),
+                    )
+                } else {
+                    app_url
+                };
+
+                // Keep the base URL clean when the requested path is `index.html`.
+                if path.to_str() == Some("index.html") {
+                    base_url.into_owned()
+                } else {
+                    base_url
+                        .join(&path.to_string_lossy())
+                        .map_err(crate::Error::InvalidUrl)?
+                }
+            }
+
+            WebviewUrl::External(url) => {
+                let app_url = self.get_app_url(use_https_scheme);
+                let is_app_url = app_url.make_relative(&url).is_some();
+
+                if is_app_url && is_local_network_url(&url) {
+                    Url::parse("taurino://localhost")
+                        .expect("invalid internal application URL")
+                } else {
+                    url.clone()
+                }
+            }
+
+            WebviewUrl::CustomProtocol(url) => url.clone(),
+
+            #[allow(unreachable_patterns)]
+            _ => unimplemented!(),
+        };
+
+        // Normalize inline HTML data URLs.
+        //
+        // This keeps data URLs usable when the decoded body is HTML.
+        // The check is intentionally conservative and only rewrites URLs that
+        // look like HTML documents.
+        if url.scheme() == "data" {
+            if let Ok(data_url) = data_url::DataUrl::process(url.as_str()) {
+                if let Ok((body, _)) = data_url.decode_to_vec() {
+                    let html = String::from_utf8_lossy(&body).into_owned();
+
+                    if html.contains('<') && html.contains('>') {
+                        url.set_path(&format!(",{html}"));
+                    }
+                }
+            }
+        }
+
+        pending.url = url.to_string();
+
+        self.prepare_pending_webview(pending, &label)
+    }
+    fn prepare_pending_webview(
+        &mut self,
+        mut pending: PendingWebview,
+        label: &str,
+    ) -> crate::Result<PendingWebview> {
+        let use_https_scheme = pending.webview_attributes.use_https_scheme;
+        let isolation_active = self.config.is_isolation_active();
+
+        let mut all_initialization_scripts: Vec<InitializationScript> =
+            Vec::new();
+
+        fn main_frame_script(script: String) -> InitializationScript {
+            InitializationScript {
+                script,
+                for_main_frame_only: true,
+            }
+        }
+
+        // ---------------------------------------------------------------------
+        // Base runtime bootstrap
+        // ---------------------------------------------------------------------
+
+        // This script is always injected. It creates the global runtime namespace
+        // used by the framework and plugins.
+        all_initialization_scripts.push(main_frame_script(
+            r#"
+        Object.defineProperty(window, 'isTaurino', {
+            value: true,
+        });
+
+        if (!window.__TAURINO_INTERNALS__) {
+            Object.defineProperty(window, '__TAURINO_INTERNALS__', {
+                value: {
+                    plugins: {}
+                }
+            });
+        }
+        "#
+            .to_owned(),
+        ));
+
+        // Inject metadata about the current window and webview.
+        all_initialization_scripts.push(main_frame_script(format!(
+            r#"
+        Object.defineProperty(window.__TAURINO_INTERNALS__, 'metadata', {{
+            value: {{
+                currentWindow: {{ label: {current_window_label} }},
+                currentWebview: {{ label: {current_webview_label} }}
+            }}
+        }});
+        "#,
+            current_window_label =
+                serde_json::to_string(self.window_label.as_ref())?,
+            current_webview_label = serde_json::to_string(label)?,
+        )));
+
+        // ---------------------------------------------------------------------
+        // Optional isolation runtime scripts
+        // ---------------------------------------------------------------------
+
+        // Pattern JavaScript is only generated when isolation is actually active.
+        //
+        // This keeps Brownfield mode clean and avoids injecting unused isolation
+        // configuration into normal webviews.
+        let pattern_script = if isolation_active {
+            PatternJavascript {
+                pattern: self.config.pattern_ref().into(),
+            }
+            .render_default(&Default::default())?
+            .into_string()
+        } else {
+            String::new()
+        };
+
+        // IPC JavaScript receives the isolation origin only when isolation is active.
+        let ipc_script = if isolation_active {
+            let isolation_origin = match self.config.pattern_ref() {
+                Pattern::Isolation { schema, .. } => {
+                    crate::protocol::pattern::format_real_schema(
+                        schema,
+                        use_https_scheme,
+                    )
+                }
+                Pattern::Brownfield => String::new(),
+            };
+
+            IpcJavascript {
+                isolation_origin: &isolation_origin,
+            }
+            .render_default(&Default::default())?
+            .into_string()
+        } else {
+            String::new()
+        };
+
+        // Inject the main runtime initialization script.
+        //
+        // In Brownfield mode, `pattern_script` and `ipc_script` are empty.
+        // In Isolation mode, they contain the required isolation runtime setup.
+        all_initialization_scripts.push(main_frame_script(
+            self.initialization_script(
+                &ipc_script,
+                &pattern_script,
+                use_https_scheme,
+            )?,
+        ));
+
+        // Inject the isolation iframe bootstrap only when isolation is active.
+        if isolation_active {
+            if let Pattern::Isolation { schema, .. } = self.config.pattern_ref()
+            {
+                let isolation_src =
+                    crate::protocol::pattern::format_real_schema(
+                        schema,
+                        use_https_scheme,
+                    );
+
+                all_initialization_scripts.push(main_frame_script(
+                IsolationJavascript {
+                    isolation_src: &isolation_src,
+                    style: "position: fixed; top: 0; left: 0; width: 100%; height: 100%; border: 0;",
+                }
+                .render_default(&Default::default())?
+                .into_string(),
+            ));
+            }
+        }
+
+        // ---------------------------------------------------------------------
+        // Prepend framework scripts before user-defined scripts
+        // ---------------------------------------------------------------------
+        // Prepend `all_initialization_scripts` to `webview_attributes.initialization_scripts`
+        all_initialization_scripts
+            .extend(pending.webview_attributes.initialization_scripts);
+        pending.webview_attributes.initialization_scripts =
+            all_initialization_scripts;
+
+        pending.webview_attributes = pending.webview_attributes;
+        // ---------------------------------------------------------------------
+        // Register custom protocols
+        // ---------------------------------------------------------------------
+
+        let protocols = self.registered_uri_scheme_protocols();
+        let mut registered_scheme_protocols = HashSet::new();
+
+        for (uri_scheme, protocol) in protocols {
+            registered_scheme_protocols.insert(uri_scheme.clone());
+
+            let window_label = Arc::clone(&self.window_label);
+
+            pending.internal_register_uri_scheme_protocol(
+                uri_scheme,
+                move |webview_id, request, responder| {
+                    let context = ManagerUriSchemeContext::new(
+                        window_label.as_ref(),
+                        webview_id,
+                    );
+
+                    protocol.handle(
+                        context,
+                        request,
+                        ManagerUriSchemeResponder(responder),
+                    );
+                },
+            );
+        }
+
+        // ---------------------------------------------------------------------
+        // Register built-in protocols
+        // ---------------------------------------------------------------------
+
+        let window_url =
+            Url::parse(&pending.url).map_err(crate::Error::InvalidUrl)?;
+
+        let window_origin = Self::window_origin(&window_url, use_https_scheme);
+
+        self.register_builtin_protocols(
+            &mut pending,
+            &mut registered_scheme_protocols,
+            window_origin,
+            use_https_scheme,
+        );
+
+        Ok(pending)
+    }
+
+    fn registered_uri_scheme_protocols(
+        &self,
+    ) -> Vec<(String, Arc<ManagerUriSchemeProtocol>)> {
+        self.uri_scheme_protocols
+            .lock()
+            .expect("poisoned URI scheme protocol manager")
+            .iter()
+            .map(|(scheme, protocol)| (scheme.clone(), Arc::clone(protocol)))
+            .collect()
+    }
+
+    fn register_builtin_protocols(
+        &mut self,
+        pending: &mut PendingWebview,
+        registered_scheme_protocols: &mut HashSet<String>,
+        window_origin: String,
+        use_https_scheme: bool,
+    ) {
+        if !registered_scheme_protocols.contains(APP_PROTOCOL) {
+            let _web_resource_request_handler =
+                pending.web_resource_request_handler.take();
+
+            let app_protocol = protocol::taurino::get(
+                self.config.resource_path().cloned(),
+                &window_origin,
+            );
+
+            let window_label = Arc::clone(&self.window_label);
+
+            pending.internal_register_uri_scheme_protocol(
+                APP_PROTOCOL,
+                move |webview_id, request, responder| {
+                    let context = ManagerUriSchemeContext::new(
+                        window_label.as_ref(),
+                        webview_id,
+                    );
+
+                    app_protocol.handle(
+                        context,
+                        request,
+                        ManagerUriSchemeResponder(responder),
+                    );
+                },
+            );
+
+            registered_scheme_protocols.insert(APP_PROTOCOL.to_string());
+        }
+
+        if !registered_scheme_protocols.contains(IPC_PROTOCOL) {
+            let allowed_origin = window_origin.clone();
+
+            pending.internal_register_uri_scheme_protocol(
+                IPC_PROTOCOL,
+                move |webview_id, request, responder| {
+                    let method = request.method().clone();
+                    let command = request
+                        .uri()
+                        .path()
+                        .trim_start_matches('/')
+                        .to_string();
+
+                    let response: Response<Cow<'static, [u8]>> = if method
+                        == Method::OPTIONS
+                    {
+                        Response::builder()
+                            .status(StatusCode::NO_CONTENT)
+                            .header(
+                                ACCESS_CONTROL_ALLOW_ORIGIN,
+                                allowed_origin.as_str(),
+                            )
+                            .header(
+                                ACCESS_CONTROL_ALLOW_METHODS,
+                                "POST, OPTIONS",
+                            )
+                            .header(
+                                ACCESS_CONTROL_ALLOW_HEADERS,
+                                "content-type",
+                            )
+                            .body(Cow::Owned(Vec::new()))
+                            .expect("failed to build IPC OPTIONS response")
+                    } else if method != Method::POST {
+                        Response::builder()
+                            .status(StatusCode::METHOD_NOT_ALLOWED)
+                            .header(CONTENT_TYPE, "application/json")
+                            .header(
+                                ACCESS_CONTROL_ALLOW_ORIGIN,
+                                allowed_origin.as_str(),
+                            )
+                            .body(Cow::Borrowed(ONLY_POST_ERROR))
+                            .expect("failed to build IPC method error response")
+                    } else {
+                        let body =
+                            String::from_utf8_lossy(request.body().as_ref());
+
+                        let json = match command.as_str() {
+                            "ping" => {
+                                format!(
+                                    r#"{{
+                                    "ok": true,
+                                    "command": "ping",
+                                    "webviewId": "{:?}",
+                                    "received": {}
+                                }}"#,
+                                    webview_id, body
+                                )
+                            }
+
+                            "add" => {
+                                let value: serde_json::Value =
+                                    serde_json::from_str(&body)
+                                        .unwrap_or_default();
+
+                                let a = value["a"].as_i64().unwrap_or(0);
+                                let b = value["b"].as_i64().unwrap_or(0);
+
+                                format!(
+                                    r#"{{
+                                    "ok": true,
+                                    "command": "add",
+                                    "result": {}
+                                }}"#,
+                                    a + b
+                                )
+                            }
+
+                            _ => {
+                                format!(
+                                    r#"{{
+                                    "ok": false,
+                                    "error": "Unknown IPC command: {}"
+                                }}"#,
+                                    command
+                                )
+                            }
+                        };
+
+                        Response::builder()
+                            .status(StatusCode::OK)
+                            .header(CONTENT_TYPE, "application/json")
+                            .header(
+                                ACCESS_CONTROL_ALLOW_ORIGIN,
+                                allowed_origin.as_str(),
+                            )
+                            .header(
+                                ACCESS_CONTROL_ALLOW_METHODS,
+                                "POST, OPTIONS",
+                            )
+                            .header(
+                                ACCESS_CONTROL_ALLOW_HEADERS,
+                                "content-type",
+                            )
+                            .body(Cow::Owned(json.into_bytes()))
+                            .expect("failed to build IPC response")
+                    };
+
+                    responder(response);
+                },
+            );
+
+            registered_scheme_protocols.insert(IPC_PROTOCOL.to_string());
+        }
+        if self.config.is_isolation_active() {
+            if let Pattern::Isolation {
+                assets,
+                schema,
+                key: _,
+                crypto_keys: _,
+            } = self.config.pattern_ref()
+            {
+                if !registered_scheme_protocols.contains(schema) {
+                    let protocol = crate::protocol::isolation::get(
+                        schema.clone(),
+                        Arc::clone(assets),
+                        window_origin.clone(),
+                        use_https_scheme,
+                    );
+
+                    pending.internal_register_uri_scheme_protocol(
+                        schema.clone(),
+                        move |webview_id, request, responder| {
+                            protocol.handle(
+                                webview_id,
+                                request,
+                                ManagerUriSchemeResponder(responder),
+                            );
+                        },
+                    );
+
+                    registered_scheme_protocols.insert(schema.clone());
+                }
+            }
+        }
+    }
+
+    fn window_origin(url: &Url, use_https_scheme: bool) -> String {
+        if url.scheme() == "data" {
+            return "null".into();
+        }
+
+        if (cfg!(windows) || cfg!(target_os = "android"))
+            && url.scheme() != "http"
+            && url.scheme() != "https"
+        {
+            let scheme = if use_https_scheme { "https" } else { "http" };
+            return format!("{scheme}://{}.localhost", url.scheme());
+        }
+
+        if let Some(host) = url.host() {
+            let port = url
+                .port()
+                .map(|port| format!(":{port}"))
+                .unwrap_or_default();
+
+            return format!("{}://{}{}", url.scheme(), host, port);
+        }
+
+        "null".into()
+    }
+
+    fn event_initialization_script(
+        function_name: &str,
+        listeners: &str,
+    ) -> String {
+        format!(
+            r#"
+            Object.defineProperty(window, '{function_name}', {{
+                value: function (eventData, ids) {{
+                    const listeners = (window['{listeners}'] && window['{listeners}'][eventData.event]) || [];
+
+                    for (const id of ids) {{
+                        const listener = listeners[id];
+
+                        if (listener) {{
+                            eventData.id = id;
+
+                            if (
+                                window.__TAURINO_INTERNALS__ &&
+                                typeof window.__TAURINO_INTERNALS__.runCallback === 'function'
+                            ) {{
+                                window.__TAURINO_INTERNALS__.runCallback(listener.handlerId, eventData);
+                            }}
+                        }}
+                    }}
+                }}
+            }});
+            "#
+        )
+    }
+
+    fn initialization_script(
+        &self,
+        ipc_script: &str,
+        pattern_script: &str,
+        use_https_scheme: bool,
+    ) -> crate::Result<String> {
+        #[derive(Template)]
+        #[default_template("../../scripts/init.js")]
+        struct InitJavascript<'a> {
+            #[raw]
+            pattern_script: &'a str,
+            #[raw]
+            ipc_script: &'a str,
+            #[raw]
+            core_script: &'a str,
+            #[raw]
+            event_initialization_script: &'a str,
+            #[raw]
+            freeze_prototype: &'a str,
+        }
+
+        #[derive(Template)]
+        #[default_template("../../scripts/core.js")]
+        struct CoreJavascript<'a> {
+            os_name: &'a str,
+            protocol_scheme: &'a str,
+            invoke_key: &'a str,
+        }
+
+        let core_script = CoreJavascript {
+            os_name: std::env::consts::OS,
+            protocol_scheme: if use_https_scheme { "https" } else { "http" },
+            invoke_key: "",
+        }
+        .render_default(&Default::default())?
+        .into_string();
+
+        let event_script = Self::event_initialization_script(
+            "__TAURINO_EVENT__",
+            "__TAURINO_LISTENERS__",
+        );
+
+        InitJavascript {
+            pattern_script,
+            ipc_script,
+            core_script: &core_script,
+            event_initialization_script: &event_script,
+            freeze_prototype: "",
+        }
+        .render_default(&Default::default())
+        .map(|script| script.into_string())
+        .map_err(Into::into)
+    }
+
+    pub fn resize_webviews(
+        &self,
+        window: &Window,
+        size: tao::dpi::PhysicalSize<u32>,
+    ) {
+        let inner = window.get_inner();
+        let size = size.to_logical::<f32>(inner.scale_factor());
+        let webviews = self.webviews_lock();
+
+        for webview in webviews.values() {
+            let bounds = webview
+                .bounds
+                .lock()
+                .expect("poisoned webview bounds")
+                .clone();
+
+            let Some(bounds) = bounds else {
+                continue;
+            };
+
+            if let Err(error) = webview.set_bounds(wry::Rect {
+                position: LogicalPosition::new(
+                    size.width * bounds.x_rate,
+                    size.height * bounds.y_rate,
+                )
+                .into(),
+                size: LogicalSize::new(
+                    size.width * bounds.width_rate,
+                    size.height * bounds.height_rate,
+                )
+                .into(),
+            }) {
+                eprintln!("failed to autoresize webview: {error}");
+            }
+        }
+    }
+
+    pub fn create_webview(
+        &mut self,
+        window: &Window,
+        pending: PendingWebview,
+    ) -> crate::Result<()> {
+        let pending = self.prepare_webview(pending)?;
+        let inner = window.get_inner();
+        let webview = create_wry_webview(
+            self.window_label.to_string(),
+            inner,
+            pending,
+            self,
+        )?;
+
+        self.webviews_lock().insert(webview.label.clone(), webview);
+
+        Ok(())
+    }
+}
+)
+
+isolation.rs(
+    use std::sync::Arc;
+
+use http::{
+    HeaderValue, Request, Response, StatusCode,
+    header::{CONTENT_SECURITY_POLICY, CONTENT_TYPE},
+};
+
+use crate::{
+    protocol::pattern::RuntimeAssets, utils::ManagerUriSchemeResponder,
+};
+
+/// Protocol handler for serving runtime isolation assets.
+///
+/// Unlike Tauri's `EmbeddedAssets` protocol, this handler serves assets that
+/// are provided at runtime. This makes it suitable for Python integrations
+/// where HTML, JavaScript, CSS, and other files are passed as `bytes`.
+pub struct RuntimeIsolationProtocol {
+    /// The runtime asset collection used by the isolation frame.
+    assets: Arc<RuntimeAssets>,
+
+    /// The origin of the main application window.
+    ///
+    /// This can be injected into the isolation runtime so the secure frame
+    /// knows which origin it is allowed to communicate with.
+    window_origin: String,
+
+    /// The CSP frame source for the isolation frame.
+    frame_src: String,
+
+    /// Whether the runtime uses an HTTPS-compatible custom scheme.
+    use_https_scheme: bool,
+}
+
+/// Creates a runtime isolation protocol handler.
+///
+/// The returned handler serves files from `RuntimeAssets`.
+///
+/// `schema` is the custom isolation scheme, for example:
+///
+/// - `isolation-abc123`
+///
+/// On Linux/macOS the frame source becomes:
+///
+/// - `isolation-abc123:`
+///
+/// On Windows/Android the frame source becomes:
+///
+/// - `http://isolation-abc123.localhost`
+/// - `https://isolation-abc123.localhost`
+pub fn get(
+    schema: String,
+    assets: Arc<RuntimeAssets>,
+    window_origin: String,
+    use_https_scheme: bool,
+) -> Arc<RuntimeIsolationProtocol> {
+    let frame_src = if cfg!(windows) || cfg!(target_os = "android") {
+        let scheme = if use_https_scheme { "https" } else { "http" };
+        format!("{scheme}://{schema}.localhost")
+    } else {
+        format!("{schema}:")
+    };
+
+    Arc::new(RuntimeIsolationProtocol {
+        assets,
+        window_origin,
+        frame_src,
+        use_https_scheme,
+    })
+}
+
+impl RuntimeIsolationProtocol {
+    /// Handles one isolation protocol request.
+    ///
+    /// Only assets from `RuntimeAssets` are served. Unknown paths return `404`.
+    pub fn handle(
+        &self,
+        _webview_id: &str,
+        request: Request<Vec<u8>>,
+        responder: ManagerUriSchemeResponder,
+    ) {
+        let path = request_to_asset_path(&request);
+
+        let response = match self.assets.get(&path) {
+            Some(asset) => {
+                self.asset_response(&path, asset.as_bytes(), asset.mime())
+            }
+            None => not_found_response(),
+        };
+
+        responder.respond(response);
+    }
+
+    /// Builds a response for a runtime asset.
+    ///
+    /// `index.html` receives the isolation runtime bootstrap.
+    /// Other assets are served as-is.
+    fn asset_response(
+        &self,
+        path: &str,
+        bytes: &[u8],
+        mime: &str,
+    ) -> Response<Vec<u8>> {
+        if path == "index.html" {
+            self.index_response(bytes)
+        } else {
+            response_with_body(StatusCode::OK, mime, bytes.to_vec())
+        }
+    }
+
+    /// Builds the isolation `index.html` response.
+    ///
+    /// This is the place where runtime JavaScript is injected.
+    /// Keep this small and explicit so it stays independent from Tauri internals.
+    fn index_response(&self, bytes: &[u8]) -> Response<Vec<u8>> {
+        let html = String::from_utf8_lossy(bytes);
+
+        let runtime_script = self.runtime_script();
+
+        let html = inject_runtime_script(&html, &runtime_script);
+
+        let mut response = response_with_body(
+            StatusCode::OK,
+            "text/html; charset=utf-8",
+            html.into_bytes(),
+        );
+
+        let csp = self.content_security_policy();
+
+        if let Ok(value) = HeaderValue::from_str(&csp) {
+            response
+                .headers_mut()
+                .insert(CONTENT_SECURITY_POLICY, value);
+        }
+
+        response
+    }
+
+    /// Generates the JavaScript runtime injected into the isolation page.
+    ///
+    /// This replaces Tauri's `IsolationJavascriptRuntime`.
+    /// You can extend this later with encryption, IPC validation, or message keys.
+    fn runtime_script(&self) -> String {
+        format!(
+            r#"
+<script>
+(() => {{
+    "use strict";
+
+    const WINDOW_ORIGIN = {window_origin};
+    const USE_HTTPS_SCHEME = {use_https_scheme};
+
+    Object.defineProperty(window, "__TAURINO_ISOLATION__", {{
+        value: Object.freeze({{
+            origin: WINDOW_ORIGIN,
+            useHttpsScheme: USE_HTTPS_SCHEME
+        }}),
+        configurable: false,
+        enumerable: false,
+        writable: false
+    }});
+
+    window.addEventListener("message", (event) => {{
+        if (event.origin !== WINDOW_ORIGIN) {{
+            return;
+        }}
+
+        if (!event.data || typeof event.data !== "object") {{
+            return;
+        }}
+
+        if (window.parent) {{
+            window.parent.postMessage(event.data, WINDOW_ORIGIN);
+        }}
+    }});
+}})();
+</script>
+"#,
+            window_origin = serde_json::to_string(&self.window_origin)
+                .unwrap_or_else(|_| "\"null\"".to_string()),
+            use_https_scheme = self.use_https_scheme,
+        )
+    }
+
+    /// Builds a strict default CSP for the isolation document.
+    ///
+    /// You can loosen this later if your isolation assets need fonts, images,
+    /// styles, or additional script sources.
+    fn content_security_policy(&self) -> String {
+        format!(
+            "default-src 'none'; \
+             frame-src {frame_src}; \
+             script-src 'unsafe-inline'; \
+             style-src 'unsafe-inline'; \
+             img-src data: blob:; \
+             connect-src 'none'; \
+             base-uri 'none'; \
+             form-action 'none'",
+            frame_src = self.frame_src,
+        )
+    }
+}
+
+/// Converts an HTTP request URI into a normalized asset path.
+///
+/// Examples:
+///
+/// - `/` -> `index.html`
+/// - `/index.html` -> `index.html`
+/// - `/main.js` -> `main.js`
+/// - `/assets/app.css` -> `assets/app.css`
+fn request_to_asset_path(request: &Request<Vec<u8>>) -> String {
+    let raw_path = request.uri().path();
+
+    let decoded = percent_encoding::percent_decode(raw_path.as_bytes())
+        .decode_utf8_lossy()
+        .to_string();
+
+    normalize_asset_path(&decoded)
+}
+
+/// Normalizes a request path to the key format used by `RuntimeAssets`.
+fn normalize_asset_path(path: &str) -> String {
+    let path = path.trim();
+
+    if path.is_empty() || path == "/" {
+        return "index.html".to_string();
+    }
+
+    let path = path
+        .trim_start_matches('/')
+        .trim_end_matches('/')
+        .replace('\\', "/");
+
+    if path.is_empty() {
+        "index.html".to_string()
+    } else {
+        path
+    }
+}
+
+/// Injects the runtime script into an HTML document.
+///
+/// The script is inserted before `</head>` if possible. If no `</head>` exists,
+/// it is prepended to the document.
+fn inject_runtime_script(html: &str, runtime_script: &str) -> String {
+    if let Some(index) = html.find("</head>") {
+        let mut output =
+            String::with_capacity(html.len() + runtime_script.len());
+        output.push_str(&html[..index]);
+        output.push_str(runtime_script);
+        output.push_str(&html[index..]);
+        output
+    } else if let Some(index) = html.find("</body>") {
+        let mut output =
+            String::with_capacity(html.len() + runtime_script.len());
+        output.push_str(&html[..index]);
+        output.push_str(runtime_script);
+        output.push_str(&html[index..]);
+        output
+    } else {
+        format!("{runtime_script}{html}")
+    }
+}
+
+/// Creates a simple HTTP response with body and content type.
+fn response_with_body(
+    status: StatusCode,
+    content_type: &str,
+    body: Vec<u8>,
+) -> Response<Vec<u8>> {
+    Response::builder()
+        .status(status)
+        .header(CONTENT_TYPE, content_type)
+        .body(body)
+        .unwrap_or_else(|_| {
+            Response::builder()
+                .status(StatusCode::INTERNAL_SERVER_ERROR)
+                .header(CONTENT_TYPE, "text/plain; charset=utf-8")
+                .body(b"failed to build response".to_vec())
+                .expect("failed to build fallback response")
+        })
+}
+
+/// Creates a `404 Not Found` response.
+fn not_found_response() -> Response<Vec<u8>> {
+    response_with_body(
+        StatusCode::NOT_FOUND,
+        "text/plain; charset=utf-8",
+        b"not found".to_vec(),
+    )
+}
+
+)
+
+pattern.rs(use std::{collections::HashMap, sync::Arc};
+
+use serde::Serialize;
+use serialize_to_javascript::{Template, default_template};
+
+/// The domain of the isolation iframe source.
+pub const ISOLATION_IFRAME_SRC_DOMAIN: &str = "localhost";
+
+/// Default isolation HTML path.
+pub const DEFAULT_ISOLATION_INDEX: &str = "index.html";
+
+/// Runtime asset used by the isolation pattern.
+///
+/// This is intentionally runtime-based and Python-friendly.
+/// Python can pass `bytes`, Rust stores them as `Arc<[u8]>`.
+#[derive(Debug, Clone)]
+pub struct RuntimeAsset {
+    pub bytes: Arc<[u8]>,
+    pub mime: String,
+}
+
+impl RuntimeAsset {
+    pub fn new<B, M>(bytes: B, mime: M) -> Self
+    where
+        B: Into<Vec<u8>>,
+        M: Into<String>,
+    {
+        Self {
+            bytes: Arc::<[u8]>::from(bytes.into()),
+            mime: mime.into(),
+        }
+    }
+
+    pub fn from_bytes<B>(path: &str, bytes: B) -> Self
+    where
+        B: Into<Vec<u8>>,
+    {
+        Self::new(bytes, mime_for_path(path))
+    }
+
+    pub fn as_bytes(&self) -> &[u8] {
+        &self.bytes
+    }
+
+    pub fn mime(&self) -> &str {
+        &self.mime
+    }
+}
+
+/// Runtime asset collection.
+///
+/// This replaces Tauri's compile-time `EmbeddedAssets` for your Python use case.
+#[derive(Debug, Clone, Default)]
+pub struct RuntimeAssets {
+    assets: HashMap<String, RuntimeAsset>,
+}
+
+impl RuntimeAssets {
+    pub fn new() -> Self {
+        Self {
+            assets: HashMap::new(),
+        }
+    }
+
+    /// Create isolation assets from a single HTML document.
+    ///
+    /// Python side:
+    /// `ManagerConfig.isolation_html(b"<html>...</html>")`
+    pub fn from_html<B>(html: B) -> Self
+    where
+        B: Into<Vec<u8>>,
+    {
+        let mut assets = Self::new();
+
+        assets.insert(
+            DEFAULT_ISOLATION_INDEX,
+            RuntimeAsset::new(html, "text/html; charset=utf-8"),
+        );
+
+        assets
+    }
+
+    /// Create isolation assets from a map.
+    ///
+    /// Python side can later pass:
+    ///
+    /// {
+    ///     "index.html": b"...",
+    ///     "main.js": b"...",
+    ///     "style.css": b"...",
+    /// }
+    pub fn from_bytes_map(map: HashMap<String, Vec<u8>>) -> Self {
+        let mut assets = Self::new();
+
+        for (path, bytes) in map {
+            let normalized = normalize_asset_path(&path);
+            let asset = RuntimeAsset::from_bytes(&normalized, bytes);
+            assets.insert(normalized, asset);
+        }
+
+        assets
+    }
+
+    pub fn insert<P>(&mut self, path: P, asset: RuntimeAsset)
+    where
+        P: AsRef<str>,
+    {
+        let path = normalize_asset_path(path.as_ref());
+        self.assets.insert(path, asset);
+    }
+
+    pub fn insert_bytes<P, B>(&mut self, path: P, bytes: B)
+    where
+        P: AsRef<str>,
+        B: Into<Vec<u8>>,
+    {
+        let path = normalize_asset_path(path.as_ref());
+        let asset = RuntimeAsset::from_bytes(&path, bytes);
+        self.assets.insert(path, asset);
+    }
+
+    pub fn get<P>(&self, path: P) -> Option<&RuntimeAsset>
+    where
+        P: AsRef<str>,
+    {
+        let path = normalize_asset_path(path.as_ref());
+        self.assets.get(&path)
+    }
+
+    pub fn get_index(&self) -> Option<&RuntimeAsset> {
+        self.assets.get(DEFAULT_ISOLATION_INDEX)
+    }
+
+    pub fn contains<P>(&self, path: P) -> bool
+    where
+        P: AsRef<str>,
+    {
+        let path = normalize_asset_path(path.as_ref());
+        self.assets.contains_key(&path)
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.assets.is_empty()
+    }
+
+    pub fn len(&self) -> usize {
+        self.assets.len()
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = (&String, &RuntimeAsset)> {
+        self.assets.iter()
+    }
+}
+
+/// Runtime isolation keys.
+///
+/// For now this is intentionally simple.
+/// Later you can replace this with real crypto keys or Tauri-compatible keys.
+#[derive(Debug, Clone)]
+pub struct RuntimeIsolationKeys {
+    pub message_key: Arc<str>,
+}
+
+impl RuntimeIsolationKeys {
+    pub fn new<K>(message_key: K) -> Self
+    where
+        K: Into<Arc<str>>,
+    {
+        Self {
+            message_key: message_key.into(),
+        }
+    }
+
+    pub fn generate() -> Self {
+        Self {
+            message_key: Arc::from(uuid::Uuid::new_v4().to_string()),
+        }
+    }
+}
+
+/// Application pattern.
+#[derive(Debug, Clone)]
+pub enum Pattern {
+    /// Normal application pattern.
+    Brownfield,
+
+    /// Isolation pattern.
+    ///
+    /// This variant can be created from Python bytes at runtime.
+    Isolation {
+        /// Runtime assets served on the isolation protocol.
+        assets: Arc<RuntimeAssets>,
+
+        /// The schema used for the isolation frame.
+        schema: String,
+
+        /// Random message key.
+        ///
+        /// Should be regenerated per runtime.
+        key: String,
+
+        /// Runtime crypto/key data.
+        crypto_keys: Arc<RuntimeIsolationKeys>,
+    },
+}
+
+impl Default for Pattern {
+    fn default() -> Self {
+        Self::Brownfield
+    }
+}
+
+impl Pattern {
+    pub fn brownfield() -> Self {
+        Self::Brownfield
+    }
+
+    pub fn isolation_from_html<B>(html: B) -> Self
+    where
+        B: Into<Vec<u8>>,
+    {
+        Self::isolation_from_assets(RuntimeAssets::from_html(html))
+    }
+
+    pub fn isolation_from_bytes_map(map: HashMap<String, Vec<u8>>) -> Self {
+        Self::isolation_from_assets(RuntimeAssets::from_bytes_map(map))
+    }
+
+    pub fn isolation_from_assets(assets: RuntimeAssets) -> Self {
+        let schema = format!("isolation-{}", uuid::Uuid::new_v4());
+        let key = uuid::Uuid::new_v4().to_string();
+        let crypto_keys = RuntimeIsolationKeys::generate();
+
+        Self::Isolation {
+            assets: Arc::new(assets),
+            schema,
+            key,
+            crypto_keys: Arc::new(crypto_keys),
+        }
+    }
+
+    pub fn is_brownfield(&self) -> bool {
+        matches!(self, Self::Brownfield)
+    }
+
+    pub fn is_isolation(&self) -> bool {
+        matches!(self, Self::Isolation { .. })
+    }
+
+    pub fn isolation_schema(&self) -> Option<&str> {
+        match self {
+            Self::Isolation { schema, .. } => Some(schema.as_str()),
+            Self::Brownfield => None,
+        }
+    }
+
+    pub fn isolation_key(&self) -> Option<&str> {
+        match self {
+            Self::Isolation { key, .. } => Some(key.as_str()),
+            Self::Brownfield => None,
+        }
+    }
+
+    pub fn isolation_assets(&self) -> Option<&RuntimeAssets> {
+        match self {
+            Self::Isolation { assets, .. } => Some(assets.as_ref()),
+            Self::Brownfield => None,
+        }
+    }
+
+    pub fn isolation_origin(&self, https: bool) -> String {
+        match self {
+            Self::Isolation { schema, .. } => format_real_schema(schema, https),
+            Self::Brownfield => String::new(),
+        }
+    }
+}
+
+/// The shape of the JavaScript Pattern config.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "lowercase", tag = "pattern")]
+pub(crate) enum PatternObject {
+    Brownfield,
+
+    Isolation { side: IsolationSide },
+}
+
+impl From<&Pattern> for PatternObject {
+    fn from(pattern: &Pattern) -> Self {
+        match pattern {
+            Pattern::Brownfield => Self::Brownfield,
+
+            Pattern::Isolation { .. } => Self::Isolation {
+                side: IsolationSide::default(),
+            },
+        }
+    }
+}
+
+/// Where the JavaScript is injected to.
+#[derive(Default, Debug, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub(crate) enum IsolationSide {
+    /// Original frame, the Brownfield application.
+    #[default]
+    Original,
+
+    /// Secure frame, the isolation application.
+    #[allow(dead_code)]
+    Secure,
+}
+
+#[derive(Template)]
+#[default_template("../../scripts/pattern.js")]
+pub(crate) struct PatternJavascript {
+    pub(crate) pattern: PatternObject,
+}
+
+/// Format the real isolation schema.
+///
+/// Linux/macOS:
+/// `isolation-xxx://localhost/`
+///
+/// Windows/Android:
+/// `http://isolation-xxx.localhost/`
+/// or
+/// `https://isolation-xxx.localhost/`
+pub(crate) fn format_real_schema(schema: &str, https: bool) -> String {
+    if cfg!(windows) || cfg!(target_os = "android") {
+        let scheme = if https { "https" } else { "http" };
+        format!("{scheme}://{schema}.{ISOLATION_IFRAME_SRC_DOMAIN}/")
+    } else {
+        format!("{schema}://{ISOLATION_IFRAME_SRC_DOMAIN}/")
+    }
+}
+
+/// Normalize asset paths.
+///
+/// Examples:
+/// ""              -> "index.html"
+/// "/"             -> "index.html"
+/// "/index.html"   -> "index.html"
+/// "assets/app.js" -> "assets/app.js"
+fn normalize_asset_path(path: &str) -> String {
+    let path = path.trim();
+
+    if path.is_empty() || path == "/" {
+        return DEFAULT_ISOLATION_INDEX.to_string();
+    }
+
+    path.trim_start_matches('/').replace('\\', "/")
+}
+
+/// Simple MIME detection without extra dependency.
+fn mime_for_path(path: &str) -> String {
+    let lower = path.to_ascii_lowercase();
+
+    if lower.ends_with(".html") || lower.ends_with(".htm") {
+        "text/html; charset=utf-8".into()
+    } else if lower.ends_with(".js") || lower.ends_with(".mjs") {
+        "text/javascript; charset=utf-8".into()
+    } else if lower.ends_with(".css") {
+        "text/css; charset=utf-8".into()
+    } else if lower.ends_with(".json") {
+        "application/json; charset=utf-8".into()
+    } else if lower.ends_with(".svg") {
+        "image/svg+xml".into()
+    } else if lower.ends_with(".png") {
+        "image/png".into()
+    } else if lower.ends_with(".jpg") || lower.ends_with(".jpeg") {
+        "image/jpeg".into()
+    } else if lower.ends_with(".gif") {
+        "image/gif".into()
+    } else if lower.ends_with(".webp") {
+        "image/webp".into()
+    } else if lower.ends_with(".ico") {
+        "image/x-icon".into()
+    } else if lower.ends_with(".wasm") {
+        "application/wasm".into()
+    } else if lower.ends_with(".txt") {
+        "text/plain; charset=utf-8".into()
+    } else {
+        "application/octet-stream".into()
+    }
+}
+)
+index.html(
+    <!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Tauri</title>
+  </head>
+
+  <body>
+    <h1>Tauri Commands</h1>
+    <div>Response: <span id="response"></span></div>
+    <div>Without Args: <span id="response-optional"></span></div>
+    <div id="container"></div>
+    <script>
+      function runCommand(commandName, args, optional) {
+        const id = optional ? '#response-optional' : '#response'
+        const result = document.querySelector(id)
+        window.__TAURI__.core
+          .invoke(commandName, args)
+          .then((response) => {
+            const val =
+              response instanceof ArrayBuffer
+                ? new TextDecoder().decode(response)
+                : response
+            result.innerText = `Ok(${val})`
+          })
+          .catch((error) => {
+            result.innerText = `Err(${error})`
+          })
+      }
+
+      const container = document.querySelector('#container')
+      const commands = [
+        { name: 'borrow_cmd' },
+        { name: 'raw_request' },
+        { name: 'window_label' },
+        { name: 'simple_command' },
+        { name: 'stateful_command' },
+        { name: 'async_simple_command' },
+        { name: 'async_simple_command_snake' },
+        { name: 'future_simple_command' },
+        { name: 'async_stateful_command' },
+        { name: 'simple_command_with_result' },
+        // snake
+        { name: 'future_simple_command_snake' },
+        { name: 'future_simple_command_with_return_snake' },
+        { name: 'future_simple_command_with_result_snake' },
+        { name: 'force_async_snake' },
+        { name: 'force_async_with_result_snake' },
+        { name: 'simple_command_with_result_snake' },
+        { name: 'stateful_command_with_result_snake' },
+        // state
+        { name: 'stateful_command_with_result' },
+        { name: 'async_simple_command_with_result' },
+        { name: 'future_simple_command_with_return' },
+        { name: 'future_simple_command_with_result' },
+        { name: 'async_stateful_command_with_result' },
+        { name: 'command_arguments_wild' },
+        {
+          name: 'command_arguments_struct',
+          args: { person: { name: 'ferris', age: 6 } }
+        },
+        {
+          name: 'command_arguments_tuple_struct',
+          args: { inlinePerson: ['ferris', 6] }
+        },
+        { name: 'renamed_command' },
+        { name: 'renamed_command_new' },
+        { name: 'renamed_command_in_mod' },
+        { name: 'renamed_command_in_mod_new' }
+      ]
+
+      for (const command of commands) {
+        const { name } = command
+        const args = command.args ?? {
+          [name.endsWith('snake') ? 'the_argument' : 'theArgument']: 'value'
+        }
+        const button = document.createElement('button')
+        button.innerHTML = `Run ${name}`
+        button.addEventListener('click', function () {
+          runCommand(name, args, false)
+          runCommand(name, Object.create(null), true)
+        })
+        container.appendChild(button)
+      }
+    </script>
+  </body>
+</html>
+)

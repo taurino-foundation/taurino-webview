@@ -635,12 +635,6 @@ impl Manager {
             }
         }
 
-        // ---------------------------------------------------------------------
-        // Base runtime bootstrap
-        // ---------------------------------------------------------------------
-
-        // This script is always injected. It creates the global runtime namespace
-        // used by the framework and plugins.
         all_initialization_scripts.push(main_frame_script(
             r#"
         Object.defineProperty(window, 'isTaurino', {
@@ -651,21 +645,22 @@ impl Manager {
             Object.defineProperty(window, '__TAURINO_INTERNALS__', {
                 value: {
                     plugins: {}
-                }
+                },
+                configurable: true
             });
         }
         "#
             .to_owned(),
         ));
 
-        // Inject metadata about the current window and webview.
         all_initialization_scripts.push(main_frame_script(format!(
             r#"
         Object.defineProperty(window.__TAURINO_INTERNALS__, 'metadata', {{
             value: {{
                 currentWindow: {{ label: {current_window_label} }},
                 currentWebview: {{ label: {current_webview_label} }}
-            }}
+            }},
+            configurable: true
         }});
         "#,
             current_window_label =
@@ -673,27 +668,14 @@ impl Manager {
             current_webview_label = serde_json::to_string(label)?,
         )));
 
-        // ---------------------------------------------------------------------
-        // Optional isolation runtime scripts
-        // ---------------------------------------------------------------------
+        let pattern_script = PatternJavascript {
+            pattern: self.config.pattern_ref().into(),
+        }
+        .render_default(&Default::default())?
+        .into_string();
 
-        // Pattern JavaScript is only generated when isolation is actually active.
-        //
-        // This keeps Brownfield mode clean and avoids injecting unused isolation
-        // configuration into normal webviews.
-        let pattern_script = if isolation_active {
-            PatternJavascript {
-                pattern: self.config.pattern_ref().into(),
-            }
-            .render_default(&Default::default())?
-            .into_string()
-        } else {
-            String::new()
-        };
-
-        // IPC JavaScript receives the isolation origin only when isolation is active.
-        let ipc_script = if isolation_active {
-            let isolation_origin = match self.config.pattern_ref() {
+        let isolation_origin = if isolation_active {
+            match self.config.pattern_ref() {
                 Pattern::Isolation { schema, .. } => {
                     crate::protocol::pattern::format_real_schema(
                         schema,
@@ -701,17 +683,16 @@ impl Manager {
                     )
                 }
                 Pattern::Brownfield => String::new(),
-            };
-
-            IpcJavascript {
-                isolation_origin: &isolation_origin,
             }
-            .render_default(&Default::default())?
-            .into_string()
         } else {
             String::new()
         };
 
+        let ipc_script = IpcJavascript {
+            isolation_origin: &isolation_origin,
+        }
+        .render_default(&Default::default())?
+        .into_string();
         // Inject the main runtime initialization script.
         //
         // In Brownfield mode, `pattern_script` and `ipc_script` are empty.
@@ -745,19 +726,39 @@ impl Manager {
             }
         }
 
-        // ---------------------------------------------------------------------
-        // Prepend framework scripts before user-defined scripts
-        // ---------------------------------------------------------------------
-        // Prepend `all_initialization_scripts` to `webview_attributes.initialization_scripts`
+        all_initialization_scripts.push(main_frame_script(
+            self.initialization_script(
+                &ipc_script,
+                &pattern_script,
+                use_https_scheme,
+            )?,
+        ));
+
+        if isolation_active {
+            if let Pattern::Isolation { schema, .. } = self.config.pattern_ref()
+            {
+                let isolation_src =
+                    crate::protocol::pattern::format_real_schema(
+                        schema,
+                        use_https_scheme,
+                    );
+
+                all_initialization_scripts.push(main_frame_script(
+                IsolationJavascript {
+                    isolation_src: &isolation_src,
+                    style: "position: fixed; top: 0; left: 0; width: 100%; height: 100%; border: 0;",
+                }
+                .render_default(&Default::default())?
+                .into_string(),
+            ));
+            }
+        }
+
         all_initialization_scripts
             .extend(pending.webview_attributes.initialization_scripts);
+
         pending.webview_attributes.initialization_scripts =
             all_initialization_scripts;
-
-        pending.webview_attributes = pending.webview_attributes;
-        // ---------------------------------------------------------------------
-        // Register custom protocols
-        // ---------------------------------------------------------------------
 
         let protocols = self.registered_uri_scheme_protocols();
         let mut registered_scheme_protocols = HashSet::new();
@@ -783,10 +784,6 @@ impl Manager {
                 },
             );
         }
-
-        // ---------------------------------------------------------------------
-        // Register built-in protocols
-        // ---------------------------------------------------------------------
 
         let window_url =
             Url::parse(&pending.url).map_err(crate::Error::InvalidUrl)?;
@@ -854,10 +851,14 @@ impl Manager {
         if !registered_scheme_protocols.contains(IPC_PROTOCOL) {
             let allowed_origin = window_origin.clone();
 
+            const ALLOWED_IPC_HEADERS: &str = "content-type, taurino-callback, taurino-error, taurino-invoke-key";
+            const EXPOSED_IPC_HEADERS: &str = "Taurino-Response";
+
             pending.internal_register_uri_scheme_protocol(
                 IPC_PROTOCOL,
                 move |webview_id, request, responder| {
                     let method = request.method().clone();
+
                     let command = request
                         .uri()
                         .path()
@@ -879,7 +880,11 @@ impl Manager {
                             )
                             .header(
                                 ACCESS_CONTROL_ALLOW_HEADERS,
-                                "content-type",
+                                ALLOWED_IPC_HEADERS,
+                            )
+                            .header(
+                                "Access-Control-Expose-Headers",
+                                EXPOSED_IPC_HEADERS,
                             )
                             .body(Cow::Owned(Vec::new()))
                             .expect("failed to build IPC OPTIONS response")
@@ -887,9 +892,22 @@ impl Manager {
                         Response::builder()
                             .status(StatusCode::METHOD_NOT_ALLOWED)
                             .header(CONTENT_TYPE, "application/json")
+                            .header("Taurino-Response", "error")
                             .header(
                                 ACCESS_CONTROL_ALLOW_ORIGIN,
                                 allowed_origin.as_str(),
+                            )
+                            .header(
+                                ACCESS_CONTROL_ALLOW_METHODS,
+                                "POST, OPTIONS",
+                            )
+                            .header(
+                                ACCESS_CONTROL_ALLOW_HEADERS,
+                                ALLOWED_IPC_HEADERS,
+                            )
+                            .header(
+                                "Access-Control-Expose-Headers",
+                                EXPOSED_IPC_HEADERS,
                             )
                             .body(Cow::Borrowed(ONLY_POST_ERROR))
                             .expect("failed to build IPC method error response")
@@ -897,16 +915,26 @@ impl Manager {
                         let body =
                             String::from_utf8_lossy(request.body().as_ref());
 
-                        let json = match command.as_str() {
+                        let (json, taurino_response) = match command.as_str() {
                             "ping" => {
-                                format!(
-                                    r#"{{
-                                    "ok": true,
-                                    "command": "ping",
-                                    "webviewId": "{:?}",
-                                    "received": {}
-                                }}"#,
-                                    webview_id, body
+                                let received: serde_json::Value =
+                                    serde_json::from_str(&body).unwrap_or_else(
+                                        |_| {
+                                            serde_json::Value::String(
+                                                body.to_string(),
+                                            )
+                                        },
+                                    );
+
+                                (
+                                    serde_json::json!({
+                                        "ok": true,
+                                        "command": "ping",
+                                        "webviewId": webview_id,
+                                        "received": received
+                                    })
+                                    .to_string(),
+                                    "ok",
                                 )
                             }
 
@@ -918,30 +946,34 @@ impl Manager {
                                 let a = value["a"].as_i64().unwrap_or(0);
                                 let b = value["b"].as_i64().unwrap_or(0);
 
-                                format!(
-                                    r#"{{
-                                    "ok": true,
-                                    "command": "add",
-                                    "result": {}
-                                }}"#,
-                                    a + b
+                                (
+                                    serde_json::json!({
+                                        "ok": true,
+                                        "command": "add",
+                                        "result": a + b
+                                    })
+                                    .to_string(),
+                                    "ok",
                                 )
                             }
 
-                            _ => {
-                                format!(
-                                    r#"{{
+                            _ => (
+                                serde_json::json!({
                                     "ok": false,
-                                    "error": "Unknown IPC command: {}"
-                                }}"#,
-                                    command
-                                )
-                            }
+                                    "error": format!(
+                                        "Unknown IPC command: {}",
+                                        command
+                                    )
+                                })
+                                .to_string(),
+                                "error",
+                            ),
                         };
 
                         Response::builder()
                             .status(StatusCode::OK)
                             .header(CONTENT_TYPE, "application/json")
+                            .header("Taurino-Response", taurino_response)
                             .header(
                                 ACCESS_CONTROL_ALLOW_ORIGIN,
                                 allowed_origin.as_str(),
@@ -952,7 +984,11 @@ impl Manager {
                             )
                             .header(
                                 ACCESS_CONTROL_ALLOW_HEADERS,
-                                "content-type",
+                                ALLOWED_IPC_HEADERS,
+                            )
+                            .header(
+                                "Access-Control-Expose-Headers",
+                                EXPOSED_IPC_HEADERS,
                             )
                             .body(Cow::Owned(json.into_bytes()))
                             .expect("failed to build IPC response")
@@ -964,6 +1000,7 @@ impl Manager {
 
             registered_scheme_protocols.insert(IPC_PROTOCOL.to_string());
         }
+
         if self.config.is_isolation_active() {
             if let Pattern::Isolation {
                 assets,
@@ -1081,13 +1118,35 @@ impl Manager {
             invoke_key: &'a str,
         }
 
+        #[derive(Template)]
+        #[default_template("../../scripts/ipc-protocol.js")]
+        struct IpcProtocolJavascript<'a> {
+            invoke_key: &'a str,
+            os_name: &'a str,
+            fetch_channel_data_command: &'a str,
+            #[raw]
+            process_ipc_message_fn: &'a str,
+        }
+
         let core_script = CoreJavascript {
             os_name: std::env::consts::OS,
             protocol_scheme: if use_https_scheme { "https" } else { "http" },
-            invoke_key: "",
+            invoke_key: self.config.invoke_key(),
         }
         .render_default(&Default::default())?
         .into_string();
+
+        let ipc_protocol_script = IpcProtocolJavascript {
+            invoke_key: self.config.invoke_key(),
+            os_name: std::env::consts::OS,
+            fetch_channel_data_command: "__taurino_fetch_channel_data",
+            process_ipc_message_fn: PROCESS_IPC_MESSAGE_FN,
+        }
+        .render_default(&Default::default())?
+        .into_string();
+
+        let ipc_bootstrap_script =
+            format!("{ipc_protocol_script}\n{ipc_script}");
 
         let event_script = Self::event_initialization_script(
             "__TAURINO_EVENT__",
@@ -1096,7 +1155,7 @@ impl Manager {
 
         InitJavascript {
             pattern_script,
-            ipc_script,
+            ipc_script: &ipc_bootstrap_script,
             core_script: &core_script,
             event_initialization_script: &event_script,
             freeze_prototype: "",
